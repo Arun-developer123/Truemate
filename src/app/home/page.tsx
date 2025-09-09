@@ -17,9 +17,8 @@ export default function HomePage() {
     { role: "assistant", content: "Hi 👋 I'm Truemate, your AI companion!" },
   ]);
   const [input, setInput] = useState("");
-  const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [popup, setPopup] = useState<any>(null);
+  const [popup, setPopup] = useState<React.ReactNode>(null);
   const [fullscreenGame, setFullscreenGame] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const router = useRouter();
@@ -32,7 +31,6 @@ export default function HomePage() {
         router.push("/signin");
         return;
       }
-      setUserId(data.user.id ?? null);
       setUserEmail(data.user.email ?? null);
     };
     getUser();
@@ -59,7 +57,7 @@ export default function HomePage() {
             if (Notification.permission === "granted") {
               new Notification("Truemate", {
                 body: latest.content,
-                icon: "/icon.png", // public folder me ek icon.png daal dena
+                icon: "/icon.png",
               });
             }
           }

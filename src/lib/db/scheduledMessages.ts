@@ -15,7 +15,7 @@ export type ScheduledMessage = {
   channel: string;
   send_jitter_seconds: number;
   idempotency_key?: string | null;
-  metadata: any;
+  metadata: Record<string, unknown> | null; // ✅ fixed type
   status: "pending" | "sent" | "cancelled" | "failed";
   created_at: string;
   sent_at?: string | null;
