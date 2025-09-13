@@ -2,28 +2,30 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Supabase client
+// Supabase client with service role
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
 );
 
-// Type
+// Types
 type ScheduledMessage = {
   id: string;
   user_id: string;
   next_message_text: string;
   next_message_time: string;
   status: string;
+  priority: number;
 };
 
-// Serve the function
+// Serve edge function
 serve(async (_req: Request) => {
-  console.log("🔍 Worker cron triggered...");
+  console.log("🔍 Cron worker triggered...");
 
   try {
-    // 1️⃣ Fetch due messages
     const now = new Date().toISOString();
+
+    // 1️⃣ Fetch due messages
     const { data: dueMessages, error } = await supabase
       .from("scheduled_messages")
       .select("*")
@@ -34,7 +36,10 @@ serve(async (_req: Request) => {
 
     if (error) {
       console.error("❌ Error fetching due messages:", error);
-      return new Response(JSON.stringify({ error: "Failed to fetch messages" }), { status: 500 });
+      return new Response(
+        JSON.stringify({ error: "Failed to fetch messages" }),
+        { status: 500 }
+      );
     }
 
     if (!dueMessages || dueMessages.length === 0) {
@@ -46,43 +51,54 @@ serve(async (_req: Request) => {
 
     console.log(`📬 Found ${dueMessages.length} due messages`);
 
-    // 2️⃣ Process each message safely
+    // 2️⃣ Process each message
     for (const msg of dueMessages as ScheduledMessage[]) {
       try {
-        console.log(`🚀 Sending message to user ${msg.user_id}`);
+        console.log(`🚀 Sending proactive message to user ${msg.user_id}`);
 
-        // Fetch user chat safely
+        // Fetch user chat
         const { data: userData, error: fetchError } = await supabase
           .from("users_data")
           .select("chat")
           .eq("id", msg.user_id)
-          .single();
+          .maybeSingle();
 
-        if (fetchError) {
-          console.warn(`⚠️ User ${msg.user_id} not found or error fetching chat`, fetchError);
-          continue; // skip this message, don't crash
+        if (fetchError || !userData) {
+          console.warn(
+            `⚠️ User ${msg.user_id} not found or error fetching chat`,
+            fetchError
+          );
+          continue;
         }
 
-        const currentChat = Array.isArray(userData?.chat) ? userData.chat : [];
+        // Build new message
+        const currentChat = Array.isArray(userData.chat) ? userData.chat : [];
         const newMessage = {
           role: "assistant",
           content: msg.next_message_text,
           proactive: true,
           created_at: new Date().toISOString(),
         };
+
         const updatedChat = [...currentChat, newMessage];
 
-        // Update user chat safely
+        // Update user chat
         const { error: updateError } = await supabase
           .from("users_data")
-          .update({ chat: updatedChat, updated_at: new Date().toISOString() })
+          .update({
+            chat: updatedChat,
+            updated_at: new Date().toISOString(),
+          })
           .eq("id", msg.user_id);
 
         if (updateError) {
-          console.warn(`⚠️ Failed to update chat for user ${msg.user_id}`, updateError);
+          console.warn(
+            `⚠️ Failed to update chat for user ${msg.user_id}`,
+            updateError
+          );
         }
 
-        // Mark as sent safely
+        // Mark scheduled message as sent
         const { error: markError } = await supabase
           .from("scheduled_messages")
           .update({
@@ -96,9 +112,9 @@ serve(async (_req: Request) => {
           console.warn(`⚠️ Failed to mark message ${msg.id} as sent`, markError);
         }
 
-        console.log(`✅ Message processed: ${msg.next_message_text}`);
+        console.log(`✅ Message sent: ${msg.next_message_text}`);
       } catch (err) {
-        console.error(`❌ Unexpected error for message ${msg.id}`, err);
+        console.error(`❌ Unexpected error processing message ${msg.id}`, err);
       }
     }
 
@@ -108,6 +124,9 @@ serve(async (_req: Request) => {
     );
   } catch (err) {
     console.error("⚠️ Worker unexpected error", err);
-    return new Response(JSON.stringify({ error: "Unexpected worker error" }), { status: 500 });
+    return new Response(
+      JSON.stringify({ error: "Unexpected worker error" }),
+      { status: 500 }
+    );
   }
 });

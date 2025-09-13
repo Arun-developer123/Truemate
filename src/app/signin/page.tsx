@@ -25,7 +25,7 @@ export default function SignInPage() {
     }
 
     // naya user row insert karo
-    await supabase.from("users_data").insert({ email });
+    await supabase.from("users_data").upsert({ email });
     alert("Account created! Check your email for verification.");
   };
 

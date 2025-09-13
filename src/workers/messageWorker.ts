@@ -1,42 +1,113 @@
 // src/workers/messageWorker.ts
+import { createClient } from "@supabase/supabase-js";
 
-import { fetchDueMessages, markMessageSent } from "@/lib/db/scheduledMessages";
-import { sendMessageToUser } from "@/lib/messaging/sendMessage";
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
-// Background loop (poll every 60 sec)
+type ScheduledMessage = {
+  id: string;
+  user_id: string;
+  next_message_text: string;
+  next_message_time: string;
+  status: string;
+  priority: number;
+};
+
 export async function runMessageWorker() {
-  console.log("📢 Worker started...");
+  console.log("🔍 Local worker triggered...");
 
-  setInterval(async () => {
-    try {
-      console.log("🔍 Checking for due messages...");
+  try {
+    const now = new Date().toISOString();
 
-      // 1. Fetch messages that are ready to be sent
-      const dueMessages = await fetchDueMessages(50);
+    // 1️⃣ Fetch due messages
+    const { data: dueMessages, error } = await supabase
+      .from("scheduled_messages")
+      .select("*")
+      .eq("status", "pending")
+      .lte("next_message_time", now)
+      .order("priority", { ascending: true })
+      .limit(50);
 
-      if (dueMessages.length === 0) {
-        console.log("✅ No due messages right now");
-        return;
-      }
-
-      // 2. Process each message
-      for (const msg of dueMessages) {
-        console.log(`🚀 Sending message to user ${msg.user_id}`);
-
-        try {
-          // Send proactive message
-          await sendMessageToUser(msg.user_id, msg.next_message_text);
-
-          // Mark as sent
-          await markMessageSent(msg.id);
-
-          console.log(`✅ Sent: ${msg.next_message_text}`);
-        } catch (err) {
-          console.error(`❌ Failed to send message ${msg.id}`, err);
-        }
-      }
-    } catch (err) {
-      console.error("⚠️ Worker error:", err);
+    if (error) {
+      console.error("❌ Error fetching due messages:", error);
+      return;
     }
-  }, 60_000); // run every 60 seconds
+
+    if (!dueMessages || dueMessages.length === 0) {
+      console.log("✅ No due messages");
+      return;
+    }
+
+    console.log(`📬 Found ${dueMessages.length} due messages`);
+
+    for (const msg of dueMessages as ScheduledMessage[]) {
+      try {
+        console.log(`🚀 Sending proactive message to user ${msg.user_id}`);
+
+        const { data: userData, error: fetchError } = await supabase
+          .from("users_data")
+          .select("chat")
+          .eq("id", msg.user_id)
+          .maybeSingle();
+
+        if (fetchError || !userData) {
+          console.warn(`⚠️ User ${msg.user_id} not found`, fetchError);
+          continue;
+        }
+
+        const currentChat = Array.isArray(userData.chat) ? userData.chat : [];
+        const newMessage = {
+          role: "assistant",
+          content: msg.next_message_text,
+          proactive: true,
+          created_at: new Date().toISOString(),
+        };
+        const updatedChat = [...currentChat, newMessage];
+
+        const { error: updateError } = await supabase
+          .from("users_data")
+          .update({
+            chat: updatedChat,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", msg.user_id);
+
+        if (updateError) {
+          console.warn(
+            `⚠️ Failed to update chat for user ${msg.user_id}`,
+            updateError
+          );
+        }
+
+        const { error: markError } = await supabase
+          .from("scheduled_messages")
+          .update({
+            status: "sent",
+            sent_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", msg.id);
+
+        if (markError) {
+          console.warn(`⚠️ Failed to mark message ${msg.id} as sent`, markError);
+        }
+
+        console.log(`✅ Message sent: ${msg.next_message_text}`);
+      } catch (err) {
+        console.error(`❌ Unexpected error for message ${msg.id}`, err);
+      }
+    }
+  } catch (err) {
+    console.error("⚠️ Local worker unexpected error", err);
+  }
+}
+
+// Run locally if executed directly
+if (require.main === module) {
+  runMessageWorker().then(() => {
+    console.log("🏁 Local worker finished.");
+    process.exit(0);
+  });
 }
