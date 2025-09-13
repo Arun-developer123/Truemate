@@ -13,9 +13,26 @@ if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
 
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
+interface PushSubscriptionKeys {
+  p256dh: string;
+  auth: string;
+}
+
+interface PushSubscription {
+  endpoint: string;
+  keys: PushSubscriptionKeys;
+}
+
+interface SubscriptionRow {
+  id: string;
+  subscription: PushSubscription;
+}
+
 export async function POST(req: Request) {
   try {
-    const { email, title, body, url } = await req.json();
+    const body = await req.json() as { email?: string; title?: string; body?: string; url?: string };
+    const { email, title, body: msgBody, url } = body;
+
     if (!email || !title) {
       return NextResponse.json({ error: "email and title required" }, { status: 400 });
     }
@@ -35,18 +52,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "No subscriptions found" });
     }
 
-    const payload = JSON.stringify({ title, body, url });
+    const payload = JSON.stringify({ title, body: msgBody, url });
 
     // send notifications (and cleanup invalid subs)
     const removals: string[] = [];
     await Promise.all(
-      rows.map(async (r: any) => {
+      (rows as SubscriptionRow[]).map(async (r) => {
         try {
           await webpush.sendNotification(r.subscription, payload);
-        } catch (err: any) {
-          console.warn("web-push send error:", err && err.statusCode ? err.statusCode : err);
+        } catch (err) {
+          const e = err as { statusCode?: number };
+          console.warn("web-push send error:", e.statusCode ?? err);
           // If unsubscribe / gone, schedule removal
-          const code = err?.statusCode;
+          const code = e.statusCode;
           if (code === 410 || code === 404) {
             removals.push(r.id);
           }
@@ -59,7 +77,7 @@ export async function POST(req: Request) {
       await supabaseServer.from("push_subscriptions").delete().in("id", removals);
     }
 
-    return NextResponse.json({ ok: true, sent: rows.length - removals.length });
+    return NextResponse.json({ ok: true, sent: (rows as SubscriptionRow[]).length - removals.length });
   } catch (err) {
     console.error("/api/push/send error:", err);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

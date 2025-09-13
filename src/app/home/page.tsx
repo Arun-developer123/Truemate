@@ -74,47 +74,53 @@ export default function HomePage() {
   }, [router]);
 
   // 🔹 Realtime listener (proactive/reminders)
-  useEffect(() => {
-    if (!userEmail) return;
+useEffect(() => {
+  if (!userEmail) return;
 
-    const handleRealtime = (payload: any) => {
-      const incoming: Message[] = payload.new?.chat || [];
-      const clean = dedupeMessages(incoming);
+  type RealtimePayload = {
+    new?: {
+      chat?: Message[];
+    };
+  };
 
-      // if identical to current messages, skip
-      if (JSON.stringify(clean) === JSON.stringify(messagesRef.current)) return;
+  const handleRealtime = (payload: RealtimePayload) => {
+    const incoming: Message[] = payload.new?.chat ?? [];
+    const clean = dedupeMessages(incoming);
 
-      setMessages(clean);
+    // if identical to current messages, skip
+    if (JSON.stringify(clean) === JSON.stringify(messagesRef.current)) return;
 
-      // Unread + notification for proactive/reminders
-      const latest = clean[clean.length - 1];
-      if (latest?.role === "assistant" && latest?.proactive && !latest?.seen) {
-        setUnreadCount((c) => c + 1);
-        if (Notification.permission === "granted") {
-          new Notification("Truemate", { body: latest.content, icon: "/icon.png" });
-        }
+    setMessages(clean);
+
+    // Unread + notification for proactive/reminders
+    const latest = clean[clean.length - 1];
+    if (latest?.role === "assistant" && latest?.proactive && !latest?.seen) {
+      setUnreadCount((c) => c + 1);
+      if (Notification.permission === "granted") {
+        new Notification("Truemate", { body: latest.content, icon: "/icon.png" });
       }
-    };
+    }
+  };
 
-    const channel = supabase
-      .channel("chat-changes")
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "users_data", filter: `email=eq.${userEmail}` },
-        handleRealtime
-      )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "users_data", filter: `email=eq.${userEmail}` },
-        handleRealtime
-      )
-      .subscribe();
+  const channel = supabase
+    .channel("chat-changes")
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "users_data", filter: `email=eq.${userEmail}` },
+      handleRealtime
+    )
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "users_data", filter: `email=eq.${userEmail}` },
+      handleRealtime
+    )
+    .subscribe();
 
-    return () => {
-      // removeChannel is fine for cleanup
-      supabase.removeChannel(channel);
-    };
-  }, [userEmail]);
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}, [userEmail]);
+
 
   // 🔹 Polling fallback (2–3 sec) if realtime fails
   useEffect(() => {

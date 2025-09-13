@@ -2,6 +2,15 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer"; // service_role client
 
+type Role = "user" | "assistant" | "system";
+
+interface Message {
+  role: Role;
+  content: string;
+  proactive?: boolean;
+  seen?: boolean;
+}
+
 export async function POST(req: Request) {
   try {
     const raw = await req.text();
@@ -9,7 +18,7 @@ export async function POST(req: Request) {
 
     let email: string | undefined;
     try {
-      const parsed = JSON.parse(raw || "{}");
+      const parsed = JSON.parse(raw || "{}") as { email?: string };
       email = parsed.email;
     } catch (parseErr) {
       console.error("❌ Failed to parse sendBeacon body:", parseErr);
@@ -39,11 +48,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "User row not found" }, { status: 404 });
     }
 
-    const chatData: any[] = Array.isArray(userRow.chat) ? userRow.chat : [];
+    const chatData: Message[] = Array.isArray(userRow.chat) ? userRow.chat : [];
 
     if (chatData.length === 0) {
       console.log("ℹ️ No chat to summarize for:", email);
-      // still clear any fully-seen proactive messages (none) and update timestamp
       const { error: updateNoChatErr } = await supabaseServer
         .from("users_data")
         .update({ updated_at: new Date().toISOString() })
@@ -59,17 +67,12 @@ export async function POST(req: Request) {
 
     // 2) Filter messages for summarization (exclude proactive)
     const toSummarize = chatData.filter(
-      (m: any) =>
-        (m.role === "user" || m.role === "assistant") &&
-        !m.proactive
+      (m) => (m.role === "user" || m.role === "assistant") && !m.proactive
     );
 
-    // Keep unseen proactive messages (we will persist them back into chat)
-    const proactiveMsgs = chatData.filter(
-      (m: any) => m.proactive === true && m.seen === false
-    );
+    // Keep unseen proactive messages
+    const proactiveMsgs = chatData.filter((m) => m.proactive === true && !m.seen);
 
-    // If nothing to summarize (only proactive present), just update DB to keep unseen proactive and exit
     if (toSummarize.length === 0) {
       console.log("ℹ️ No user/assistant msgs to summarize, keeping unseen proactive only for:", email);
 
@@ -89,7 +92,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Only unseen proactive messages kept" });
     }
 
-    // 3) Call summarization model (wrap in try/catch to handle model errors gracefully)
+    // 3) Call summarization model
     let newSummary = "No summary generated.";
     try {
       const modelReq = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -112,26 +115,27 @@ export async function POST(req: Request) {
         }),
       });
 
-      const modelRes = await modelReq.json();
+      const modelRes = (await modelReq.json()) as {
+        choices?: { message?: { content?: string } }[];
+      };
       newSummary = modelRes.choices?.[0]?.message?.content ?? newSummary;
       console.log("🟢 Generated Summary:", newSummary);
     } catch (modelErr) {
       console.error("❌ Summarization model error:", modelErr);
-      // continue — we'll still attempt to append a fallback note
       newSummary = `⚠️ Summary generation failed at ${new Date().toISOString()}.`;
     }
 
-    // 4) Append to old summary (don't overwrite)
-    const previousSummary = typeof userRow.chat_summary === "string" && userRow.chat_summary.trim()
-      ? userRow.chat_summary
-      : "";
+    // 4) Append to old summary
+    const previousSummary =
+      typeof userRow.chat_summary === "string" && userRow.chat_summary.trim()
+        ? userRow.chat_summary
+        : "";
 
     const timestamp = new Date().toISOString();
     const appendedBlock = `\n\n---\nSummary saved: ${timestamp}\n\n${newSummary}`;
-
     const finalSummary = previousSummary ? `${previousSummary}${appendedBlock}` : `${newSummary}`;
 
-    // 5) Update DB: set chat_summary = finalSummary and keep only unseen proactive messages
+    // 5) Update DB
     const { error: updateError } = await supabaseServer
       .from("users_data")
       .update({
