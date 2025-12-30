@@ -262,7 +262,7 @@ useEffect(() => {
   }, []);
 
   // 🔹 Footer Buttons functionality
-  const handleFooterClick = async (type: string) => {
+  /*const handleFooterClick = async (type: string) => {
     if (!userEmail) return;
 
     switch (type) {
@@ -328,7 +328,7 @@ useEffect(() => {
         setPopup("🥚 You found a secret Easter Egg! 🐰✨");
         break;
     }
-  };
+  };*/
 
   // 🔹 Sign out
   const handleSignOut = async () => {
@@ -427,46 +427,10 @@ useEffect(() => {
           </div>
         </div>
 
-        {/* Footer Icons */}
-        <footer className="flex justify-around items-center p-3 bg-gray-200 border-t">
-          <button
-            onClick={() => handleFooterClick("games")}
-            className="flex flex-col items-center text-sm text-gray-700 hover:text-purple-600"
-          >
-            🎮 Games
-          </button>
-          <button
-            onClick={() => handleFooterClick("challenges")}
-            className="flex flex-col items-center text-sm text-gray-700 hover:text-purple-600"
-          >
-            📆 Challenges
-          </button>
-          <button
-            onClick={() => handleFooterClick("achievements")}
-            className="flex flex-col items-center text-sm text-gray-700 hover:text-purple-600"
-          >
-            🏆 Achievements
-          </button>
-          <button
-            onClick={() => handleFooterClick("easter")}
-            className="flex flex-col items-center text-sm text-gray-700 hover:text-purple-600"
-          >
-            🥚 Easter Eggs
-          </button>
-        </footer>
+        
       </div>
 
-      {/* Popup Modal */}
-      {popup && (
-        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50" onClick={() => setPopup(null)}>
-          <div className="bg-white rounded-2xl shadow-lg w-[95vw] max-w-3xl max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="p-4 overflow-y-auto flex-1">{popup}</div>
-            <div className="p-3 border-t text-right">
-              <button onClick={() => setPopup(null)} className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
+      
     </div>
   );
 }
