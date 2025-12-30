@@ -1,6 +1,6 @@
 "use client";
 
-import React, { JSX } from "react";
+import React from "react";
 import { useRouter } from "next/navigation";
 import { motion, Variants } from "framer-motion";
 import { Mail, Gamepad, Calendar, Award, Star } from "lucide-react";
@@ -9,7 +9,7 @@ interface Feature {
   id: number;
   title: string;
   desc: string;
-  Icon: React.ComponentType<any>;
+  Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
 }
 
 const features: Feature[] = [
@@ -31,7 +31,7 @@ const cardVariants: Variants = {
   hover: { scale: 1.03, y: -6, boxShadow: "0 12px 30px rgba(0,0,0,0.35)" },
 };
 
-export default function LandingPage(): JSX.Element {
+export default function LandingPage(): React.JSX.Element {
   const router = useRouter();
 
   return (
@@ -59,7 +59,10 @@ export default function LandingPage(): JSX.Element {
             <div className="flex flex-col lg:flex-row items-center gap-8">
               <div className="flex-1 text-left">
                 <h1 className="text-4xl lg:text-5xl font-extrabold leading-tight">
-                  Welcome to <span className="bg-clip-text text-transparent bg-gradient-to-r from-white to-indigo-200">Truemate</span>
+                  Welcome to{" "}
+                  <span className="bg-clip-text text-transparent bg-gradient-to-r from-white to-indigo-200">
+                    Truemate
+                  </span>
                 </h1>
                 <p className="mt-4 text-gray-100/90 max-w-xl">
                   Your personal AI companion for chatting, games, challenges and delightful surprises. Stay productive while having fun — daily.
@@ -148,7 +151,7 @@ export default function LandingPage(): JSX.Element {
                 className="relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 backdrop-blur-md"
               >
                 <div className="flex items-start gap-4">
-                  <div className="rounded-lg bg-white/6 p-3">
+                  <div className="rounded-lg bg-white/6 p-3" aria-hidden>
                     <f.Icon size={20} />
                   </div>
 
@@ -193,7 +196,7 @@ export default function LandingPage(): JSX.Element {
                 </div>
               </div>
 
-              <div className="mt-4 text-sm text-gray-200/80">Click start to reveal today's hidden interaction and win a badge.</div>
+              <div className="mt-4 text-sm text-gray-200/80">Click start to reveal today&apos;s hidden interaction and win a badge.</div>
 
               <button type="button" className="mt-4 w-full rounded-2xl bg-white text-indigo-700 font-semibold px-4 py-2">Reveal</button>
             </motion.aside>
