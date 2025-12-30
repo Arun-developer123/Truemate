@@ -261,74 +261,6 @@ useEffect(() => {
     return () => window.removeEventListener("focus", handleFocus);
   }, []);
 
-  // 🔹 Footer Buttons functionality
-  /*const handleFooterClick = async (type: string) => {
-    if (!userEmail) return;
-
-    switch (type) {
-      case "games":
-        setPopup(
-          <div className="space-y-4">
-            <h2 className="text-lg font-bold mb-2">🎮 Multiplayer Games</h2>
-            <div className="grid gap-3">
-              <button
-                className="bg-purple-600 text-white py-2 rounded"
-                onClick={() =>
-                  setFullscreenGame("https://www.crazygames.com/embed/crazy-car-stunts")
-                }
-              >
-                🚗 Crazy Car Stunt Multiplayer
-              </button>
-
-              <button
-                className="bg-purple-600 text-white py-2 rounded"
-                onClick={() =>
-                  setFullscreenGame("https://zv1y2i8p.play.gamezop.com/g/SkhljT2fdgb")
-                }
-              >
-                🎲 Ludo Multiplayer
-              </button>
-
-              <button
-                className="bg-purple-600 text-white py-2 rounded"
-                onClick={() => setFullscreenGame("https://www.onlinegames.io/fragen/")}
-              >
-                🥊 Fighting Arena
-              </button>
-
-              <button
-                className="bg-purple-600 text-white py-2 rounded"
-                onClick={() => setFullscreenGame("https://www.onlinegames.io/geometry-arrow/")}
-              >
-                ♟️ Geometry-Arrow
-              </button>
-            </div>
-          </div>
-        );
-        break;
-
-      case "challenges":
-        setPopup("📆 Today's Challenge: Write 3 things you're grateful for 🙏");
-        break;
-
-      case "achievements": {
-        const { data, error } = await supabase
-          .from("users_data")
-          .select("achievements")
-          .eq("email", userEmail)
-          .maybeSingle();
-        if (error) {
-          console.error("Supabase achievements fetch error:", error.message);
-        }
-        setPopup("🏆 Achievements: " + JSON.stringify(data?.achievements || []));
-        break;
-      }
-
-      case "easter":
-        setPopup("🥚 You found a secret Easter Egg! 🐰✨");
-        break;
-    }
-  };*/
 
   // 🔹 Sign out
   const handleSignOut = async () => {
@@ -336,24 +268,7 @@ useEffect(() => {
     router.push("/signin");
   };
 
-  // 🔹 Fullscreen Game View
-  if (fullscreenGame) {
-    return (
-      <div className="fixed inset-0 z-50 bg-black flex flex-col">
-        <div className="p-2 bg-purple-600 text-white flex justify-between items-center">
-          <span className="font-bold">🎮 Playing Game</span>
-          <button
-            onClick={() => setFullscreenGame(null)}
-            className="bg-red-500 px-3 py-1 rounded hover:bg-red-600"
-          >
-            ⬅ Back to Chat
-          </button>
-        </div>
-        <iframe src={fullscreenGame} className="w-full flex-1" allow="gamepad *"></iframe>
-      </div>
-    );
-  }
-
+  
   return (
     <div className="flex flex-col h-screen relative">
       {/* Background image (put aarvi.jpg in public/) */}
