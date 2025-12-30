@@ -9,7 +9,7 @@ interface Feature {
   id: number;
   title: string;
   desc: string;
-  Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  Icon: React.ComponentType<React.SVGProps<SVGSVGElement> & { size?: number | string }>;
 }
 
 const features: Feature[] = [
@@ -72,6 +72,7 @@ export default function LandingPage(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => router.push("/signin")}
+                    aria-label="Get started"
                     className="inline-flex items-center gap-3 rounded-2xl bg-white text-indigo-700 font-semibold px-6 py-3 shadow-lg hover:scale-[1.02] hover:shadow-2xl transition-transform"
                   >
                     Get Started →
@@ -80,6 +81,7 @@ export default function LandingPage(): React.JSX.Element {
                   <button
                     type="button"
                     onClick={() => router.push("/about")}
+                    aria-label="Learn more"
                     className="inline-flex items-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm hover:bg-white/5 transition"
                   >
                     Learn more
@@ -88,7 +90,9 @@ export default function LandingPage(): React.JSX.Element {
 
                 <div className="mt-6 text-xs text-gray-200/80">
                   <span className="inline-flex items-center gap-2">
-                    <span className="rounded-full bg-white/8 px-2 py-1">✨</span>
+                    <span className="rounded-full bg-white/8 px-2 py-1" aria-hidden>
+                      ✨
+                    </span>
                     <span>Chat • Games • Challenges • Achievements • Easter Eggs</span>
                   </span>
                 </div>
@@ -187,7 +191,7 @@ export default function LandingPage(): React.JSX.Element {
 
             <motion.aside variants={cardVariants} className="rounded-2xl p-6 bg-white/5 border border-white/8">
               <div className="flex items-center gap-3">
-                <div className="rounded-full bg-white/8 p-2">
+                <div className="rounded-full bg-white/8 p-2" aria-hidden>
                   <Star size={18} />
                 </div>
                 <div>
