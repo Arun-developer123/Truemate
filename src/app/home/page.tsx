@@ -1,12 +1,16 @@
-'use client';
+// C:\Users\aruna\truemate\src\app\home\page.tsx
+"use client";
 
-import React, { useEffect, useRef, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient';
-import { useRouter } from 'next/navigation';
-import { registerServiceWorkerAndSubscribe } from '@/lib/pushClient';
+import React, { useEffect, useRef, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
+import { registerServiceWorkerAndSubscribe } from "@/lib/pushClient";
 
-// Types
-type Role = 'user' | 'assistant' | 'system';
+// NOTE: If you want to persist background choices in DB, add this column to your users_data table:
+// ALTER TABLE public.users_data ADD COLUMN IF NOT EXISTS background_image text;
+
+// --- Types ---
+type Role = "user" | "assistant" | "system";
 type Message = {
   role: Role;
   content: string;
@@ -15,368 +19,430 @@ type Message = {
   seen?: boolean;
 };
 
-// Small presentational components (kept inside file for simplicity)
-function Avatar({ name }: { name: string | null }) {
-  const initial = name ? name.charAt(0).toUpperCase() : 'T';
-  return (
-    <div className="h-12 w-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-semibold text-lg shadow">
-      {initial}
-    </div>
-  );
-}
-
-function MessageBubble({ msg }: { msg: Message }) {
-  const time = msg.created_at
-    ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '';
-  const base = 'p-3 rounded-xl max-w-[78%] shadow break-words';
-  if (msg.role === 'user')
-    return (
-      <div className={`${base} bg-indigo-600 text-white self-end`}>
-        <div>{msg.content}</div>
-        <div className="text-xs opacity-70 mt-1 text-right">{time}</div>
-      </div>
-    );
-
-  return (
-    <div className={`${base} bg-white/95 text-gray-900 border`}>
-      <div className="font-medium">{msg.proactive ? 'Nyra • Reminder' : 'Nyra'}</div>
-      <div className="mt-1">{msg.content}</div>
-      <div className="text-xs opacity-60 mt-2">{time}</div>
-    </div>
-  );
-}
-
-function GalleryModal({ images, startIndex, onClose }: { images: string[]; startIndex: number; onClose: () => void }) {
-  const [index, setIndex] = useState(startIndex);
-  useEffect(() => setIndex(startIndex), [startIndex]);
-  if (!images || images.length === 0) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-      <div className="max-w-4xl w-full bg-white rounded-xl shadow-lg overflow-hidden">
-        <div className="flex items-center justify-between p-3 border-b">
-          <div className="text-sm font-semibold">
-            Gallery ({index + 1}/{images.length})
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setIndex((i) => (i - 1 + images.length) % images.length)} className="px-3 py-1 rounded bg-gray-100">
-              Prev
-            </button>
-            <button onClick={() => setIndex((i) => (i + 1) % images.length)} className="px-3 py-1 rounded bg-gray-100">
-              Next
-            </button>
-            <button onClick={onClose} className="px-3 py-1 rounded bg-red-100">
-              Close
-            </button>
-          </div>
-        </div>
-        <div className="p-4 flex items-center justify-center bg-gray-50" style={{ minHeight: 360 }}>
-          <img src={images[index]} alt={`gallery-${index}`} className="max-h-[70vh] object-contain rounded" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default function HomePage() {
+// --- Component ---
+export default function HomePage(): React.JSX.Element {
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesRef = useRef<Message[]>([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [galleryOpen, setGalleryOpen] = useState(false);
-  const [galleryIndex, setGalleryIndex] = useState(0);
-  const [galleryImages, setGalleryImages] = useState<string[]>([]);
-
+  const [sending, setSending] = useState(false);
+  const [showGallery, setShowGallery] = useState(false);
+  // default to primary image — this ensures an image is always visible
+  const [selectedBackground, setSelectedBackground] = useState<string>("/aarvi.jpg");
   const router = useRouter();
-  const listRef = useRef<HTMLDivElement | null>(null);
+
+  // Gallery images (put these in /public)
+  const backgroundOptions = ["aarvi.jpg", "aarvi-1.jpg", "aarvi-2.jpg", "aarvi-3.jpg"];
 
   useEffect(() => {
     messagesRef.current = messages;
-    scrollToBottom();
   }, [messages]);
 
   const dedupeMessages = (arr: Message[]) => {
     const seen = new Set<string>();
     return arr.filter((m) => {
-      const key = `${m.role}|${m.content}|${m.created_at || ''}`;
+      const key = `${m.role}|${m.content}|${m.created_at || ""}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
   };
 
+  // --- Get current user + load chat and background preference ---
   useEffect(() => {
     const getUser = async () => {
       const { data, error } = await supabase.auth.getUser();
       if (error || !data.user) {
-        router.push('/signin');
+        router.push("/signin");
         return;
       }
       const email = data.user.email ?? null;
       setUserEmail(email);
 
       if (email) {
-        const { data: existingData, error: fetchError } = await supabase
-          .from('users_data')
-          .select('chat')
-          .eq('email', email)
-          .maybeSingle();
+        // First try to fetch chat + background_image (if column exists)
+        let existingData: any = null;
+        try {
+          const res = await supabase.from("users_data").select("chat, background_image").eq("email", email).maybeSingle();
+          if (res.error) throw res.error;
+          existingData = res.data;
+        } catch (e: any) {
+          // If the column doesn't exist (common when upgrading), fall back to fetching chat only
+          const msg = String(e?.message || e);
+          if (/background_image/.test(msg) || /column .* does not exist/.test(msg)) {
+            try {
+              const res2 = await supabase.from("users_data").select("chat").eq("email", email).maybeSingle();
+              if (!res2.error) existingData = res2.data;
+            } catch (e2) {
+              console.error("Supabase fetch chat fallback failed:", e2);
+            }
+          } else {
+            console.error("Supabase fetch chat error:", msg);
+          }
+        }
 
-        if (fetchError) console.error('Supabase fetch chat error:', fetchError.message);
-        else if (existingData?.chat) setMessages(dedupeMessages(existingData.chat));
+        if (existingData) {
+          if (existingData.chat) {
+            const clean = dedupeMessages(existingData.chat);
+            setMessages(clean);
+          }
+          if (existingData.background_image) {
+            setSelectedBackground(`/${existingData.background_image}`);
+          }
+        }
       }
     };
     getUser();
   }, [router]);
 
-  // Realtime listener
+  // --- Realtime listener for chat updates ---
   useEffect(() => {
     if (!userEmail) return;
 
-    const handleRealtime = (payload: any) => {
-      const incoming: Message[] = payload?.new?.chat ?? [];
+    type RealtimePayload = {
+      new?: {
+        chat?: Message[];
+      };
+    };
+
+    const handleRealtime = (payload: RealtimePayload) => {
+      const incoming: Message[] = payload.new?.chat ?? [];
       const clean = dedupeMessages(incoming);
       if (JSON.stringify(clean) === JSON.stringify(messagesRef.current)) return;
       setMessages(clean);
+
       const latest = clean[clean.length - 1];
-      if (latest?.role === 'assistant' && latest?.proactive && !latest?.seen) {
+      if (latest?.role === "assistant" && latest?.proactive && !latest?.seen) {
         setUnreadCount((c) => c + 1);
-        if (Notification.permission === 'granted') new Notification('Truemate • Nyra', { body: latest.content });
+        if (typeof window !== "undefined" && Notification.permission === "granted") {
+          new Notification("Truemate", { body: latest.content, icon: "/icon.png" });
+        }
       }
     };
 
     const channel = supabase
-      .channel('chat-changes')
+      .channel("chat-changes")
       .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'users_data', filter: `email=eq.${userEmail}` },
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "users_data", filter: `email=eq.${userEmail}` },
+        handleRealtime
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "users_data", filter: `email=eq.${userEmail}` },
         handleRealtime
       )
       .subscribe();
 
-    // IMPORTANT: do NOT return a Promise from the cleanup.
     return () => {
-      // call removeChannel but don't return its Promise
-      void supabase.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
   }, [userEmail]);
 
-  // Polling fallback
+  // --- Polling fallback ---
   useEffect(() => {
     if (!userEmail) return;
     const interval = setInterval(async () => {
-      const { data, error } = await supabase.from('users_data').select('chat').eq('email', userEmail).maybeSingle();
-      if (error) console.error('Polling fetch error:', error.message);
-      else if (data?.chat) {
+      const { data, error } = await supabase.from("users_data").select("chat").eq("email", userEmail).maybeSingle();
+
+      if (error) {
+        console.error("Polling fetch error:", error.message);
+      } else if (data?.chat) {
         const clean = dedupeMessages(data.chat);
-        if (JSON.stringify(clean) !== JSON.stringify(messagesRef.current)) setMessages(clean);
+        if (JSON.stringify(clean) !== JSON.stringify(messagesRef.current)) {
+          setMessages(clean);
+        }
       }
     }, 3000);
+
     return () => clearInterval(interval);
   }, [userEmail]);
 
+  // --- Notification permission ---
   useEffect(() => {
-    if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
   }, []);
 
+  // --- Register service worker ---
   useEffect(() => {
     if (!userEmail) return;
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && Notification.permission === 'granted') {
+    if (typeof window !== "undefined" && "serviceWorker" in navigator && Notification.permission === "granted") {
       const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-      if (!vapid) return;
-      // call and ignore promise in effect (do not return it)
-      registerServiceWorkerAndSubscribe(vapid, userEmail).catch(() => console.warn('Push registration failed'));
+      if (!vapid) {
+        console.warn("NEXT_PUBLIC_VAPID_PUBLIC_KEY not set — push subscribe skipped");
+        return;
+      }
+      registerServiceWorkerAndSubscribe(vapid, userEmail)
+        .then((sub) => {
+          if (sub) console.log("Push subscribed (client).");
+        })
+        .catch((err) => console.warn("Push subscription failed:", err));
     }
   }, [userEmail]);
 
+  // --- Mark proactive as seen ---
   useEffect(() => {
-    // mark proactive as seen
     if (!userEmail) return;
     const markSeen = async () => {
       if (messages.some((m) => m.proactive && !m.seen)) {
         const updated = messages.map((m) => (m.proactive ? { ...m, seen: true } : m));
         setMessages(updated);
-        await supabase.from('users_data').update({ chat: updated, updated_at: new Date().toISOString() }).eq('email', userEmail);
+        await supabase.from("users_data").update({ chat: updated, updated_at: new Date().toISOString() }).eq("email", userEmail);
       }
     };
     markSeen();
   }, [messages, userEmail]);
 
-  const scrollToBottom = () => {
-    if (!listRef.current) return;
-    listRef.current.scrollTop = listRef.current.scrollHeight;
+  // --- Save background preference to DB ---
+  const saveBackgroundPreference = async (imageFilename: string) => {
+    if (!userEmail) return;
+    try {
+      const res = await supabase.from("users_data").update({ background_image: imageFilename, updated_at: new Date().toISOString() }).eq("email", userEmail);
+      if (res.error) {
+        // if column missing, silently ignore (we already handle fallback on read)
+        const msg = String(res.error.message || res.error);
+        if (/background_image/.test(msg) || /column .* does not exist/.test(msg)) {
+          console.warn("Background preference column missing on DB; skip saving preference.");
+        } else {
+          console.warn("Failed to save background preference:", msg);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to save background preference", e);
+    }
   };
 
+  // --- Handle send ---
   const handleSend = async () => {
     if (!input.trim() || !userEmail || sending) return;
     setSending(true);
-    const userMsg: Message = { role: 'user', content: input, created_at: new Date().toISOString() };
+    const userMsg: Message = { role: "user", content: input };
 
     try {
       const optimistic = [...messagesRef.current, userMsg];
       setMessages(optimistic);
-      setInput('');
+      setInput("");
 
-      // call api
-      const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: input }) });
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: input }),
+      });
       const data = await res.json();
-      const reply = data.choices?.[0]?.message?.content || "I'm here but couldn’t form a response — try again.";
-      const assistantMsg: Message = { role: 'assistant', content: reply, created_at: new Date().toISOString() };
+      const reply = data.choices?.[0]?.message?.content || "⚠️ Empty response";
+      const assistantMsg: Message = { role: "assistant", content: reply };
 
-      const updatedMessages = [...optimistic, assistantMsg];
+      const updatedMessages: Message[] = [...optimistic, assistantMsg];
       setMessages(updatedMessages);
 
-      await supabase.from('users_data').update({ chat: updatedMessages, updated_at: new Date().toISOString() }).eq('email', userEmail);
+      await supabase.from("users_data").update({ chat: updatedMessages, updated_at: new Date().toISOString() }).eq("email", userEmail);
 
-      // analyze
-      await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: userEmail, message: input }) });
+      await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: userEmail, message: input }),
+      });
     } catch (err) {
-      console.error('handleSend failed:', err);
+      console.error("handleSend failed:", err);
     } finally {
       setSending(false);
     }
   };
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push('/signin');
-  };
-
-  // Gallery helper — load example images from /public/gallery
+  // --- Before unload: flush chat ---
   useEffect(() => {
-    const imgs = ['/gallery/1.jpg', '/gallery/2.jpg', '/gallery/3.jpg', '/gallery/4.jpg']; // adjust to your files
-    setGalleryImages(imgs);
+    const handleBeforeUnload = () => {
+      if (!userEmail) return;
+      const payload = JSON.stringify({ email: userEmail });
+      navigator.sendBeacon("/api/flush-chat", payload);
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [userEmail]);
+
+  useEffect(() => {
+    const handleFocus = () => setUnreadCount(0);
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
   }, []);
 
-  const greeting = (() => {
-    if (!userEmail) return 'Hello';
-    const name = userEmail.split('@')[0];
-    return `Hi, ${name.charAt(0).toUpperCase() + name.slice(1)} 👋`;
-  })();
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.push("/signin");
+  };
+
+  // --- Gallery select ---
+  const selectBackground = (filename: string) => {
+    setSelectedBackground(`/${filename}`);
+    saveBackgroundPreference(filename);
+    setShowGallery(false);
+  };
+
+  // --- small helpers ---
+  const formatTime = (iso?: string) => {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return "";
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-purple-50 to-white text-gray-800">
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-6 p-6">
-        {/* Sidebar profile & gallery */}
-        <aside className="col-span-1 bg-white/90 rounded-2xl p-4 shadow sticky top-6 h-fit">
+    <div className="flex flex-col h-screen relative bg-gray-50">
+      {/* Dynamic background - make image clearly visible: lighter, minimal overlay, no blur */}
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-cover bg-center transition-all duration-700"
+        style={{
+          backgroundImage: `linear-gradient(rgba(0,0,0,0.06), rgba(0,0,0,0.14)), url('${selectedBackground}')`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+        }}
+      />
+
+      {/* subtle vignette so content remains readable */}
+      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 80px 120px rgba(0,0,0,0.22)" }} />
+
+      <div className="relative z-10 flex flex-col h-screen">
+        {/* Header */}
+        <header className="flex items-center justify-between p-4">
           <div className="flex items-center gap-3">
-            <Avatar name={userEmail} />
-            <div>
-              <div className="text-sm font-semibold">{greeting}</div>
-              <div className="text-xs text-gray-500">{userEmail}</div>
+            <div className="flex items-center gap-2">
+              <svg className="w-8 h-8" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 21s-7-4.35-9-7c-2-2.5 0-5 3-5 2 0 3 2 6 2s4-2 6-2c3 0 5 2.5 3 5-2 2.65-9 7-9 7z" fill="url(#g)" />
+                <defs>
+                  <linearGradient id="g" x1="0" x2="1">
+                    <stop offset="0" stopColor="#ff8a80" />
+                    <stop offset="1" stopColor="#ff80ab" />
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div>
+                <h1 className="text-white text-lg font-semibold drop-shadow">Truemate Chat</h1>
+                <p className="text-sm text-white/90">Close, warm & private conversations</p>
+              </div>
             </div>
           </div>
 
-          <div className="mt-4 text-sm text-gray-700">
-            Nyra is your supportive AI friend — she remembers your context and sends gentle reminders when needed. Use the gallery to view memories and visuals that help ground the conversation.
-          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="px-3 py-2 bg-white/90 rounded-xl shadow hover:scale-105 transition-transform flex items-center gap-2"
+              onClick={() => setShowGallery(true)}
+              aria-label="Open gallery"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                <path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5z" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M21 15l-5-5-3 3-4-4L3 17" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-sm font-medium">Gallery</span>
+            </button>
 
-          <div className="mt-4 flex gap-2">
-            <button onClick={() => setGalleryOpen(true)} className="flex-1 py-2 rounded bg-pink-500 text-white">Open Gallery</button>
-            <button onClick={handleSignOut} className="py-2 px-3 rounded bg-red-100 text-red-700">Sign Out</button>
+            <button onClick={handleSignOut} className="bg-red-500 text-white px-3 py-2 rounded-xl shadow hover:bg-red-600">
+              Sign Out
+            </button>
           </div>
-
-          <div className="mt-4">
-            <h4 className="text-xs font-semibold text-gray-600">Quick tips</h4>
-            <ul className="mt-2 text-sm text-gray-600 space-y-1">
-              <li>• Press Enter to send (Shift+Enter for newline)</li>
-              <li>• Nyra replies conversationally — try asking how she’s feeling</li>
-            </ul>
-          </div>
-
-          <div className="mt-6">
-            <h4 className="text-xs font-semibold text-gray-600">Mini Gallery</h4>
-            <div className="mt-2 grid grid-cols-3 gap-2">
-              {galleryImages.slice(0, 6).map((src, i) => (
-                <button key={i} onClick={() => { setGalleryIndex(i); setGalleryOpen(true); }} className="rounded overflow-hidden">
-                  <img src={src} alt={`thumb-${i}`} className="h-20 w-full object-cover" />
-                </button>
-              ))}
-            </div>
-          </div>
-        </aside>
+        </header>
 
         {/* Chat area */}
-        <section className="col-span-1 lg:col-span-2 bg-white/95 rounded-3xl p-4 shadow flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-xl font-semibold">Truemate Chat</h2>
-              <div className="text-sm text-gray-500">A safe, calm space to talk — Nyra listens.</div>
+        <main className="flex-1 overflow-hidden p-6">
+          <div className="mx-auto max-w-3xl h-full flex flex-col rounded-2xl shadow-2xl" style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03))", border: "1px solid rgba(255,255,255,0.06)" }}>
+            {/* top decorative area */}
+            <div className="p-6 border-b border-white/10 flex items-center gap-4">
+              <img src="/aarvi.jpg" alt="Aarvi" className="w-12 h-12 rounded-full object-cover ring-2 ring-white/70 shadow" />
+              <div>
+                <div className="text-white font-semibold">Aarvi</div>
+                <div className="text-sm text-white/90">Your cherished companion</div>
+              </div>
+              <div className="ml-auto text-sm text-white/90">{unreadCount > 0 ? `${unreadCount} new` : "All caught up"}</div>
             </div>
-            <div className="text-sm text-gray-500">Unread <span className="font-semibold">{unreadCount}</span></div>
-          </div>
 
-          <div ref={listRef} className="flex-1 overflow-y-auto p-2 space-y-3" style={{ maxHeight: '65vh' }}>
-            {messages.length === 0 && (
-              <div className="text-center text-gray-500 mt-12">No messages yet — say hi to start a gentle conversation.</div>
-            )}
+            {/* messages list */}
+            <div className="p-6 overflow-y-auto flex-1" id="chat-scroll">
+              <div className="space-y-4">
+                {messages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[70%] p-4 rounded-2xl shadow-md break-words text-sm leading-relaxed ${
+                      msg.role === "user"
+                        ? "bg-indigo-700/90 text-white rounded-br-none backdrop-blur-sm"
+                        : msg.proactive
+                        ? "bg-yellow-50/90 text-yellow-900 border border-yellow-300"
+                        : "bg-white/80 text-gray-900 backdrop-blur-sm"
+                    }`}>
+                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                      <div className="text-[11px] mt-2 text-gray-600 text-right">{formatTime(msg.created_at)}</div>
+                    </div>
+                  </div>
+                ))}
 
-            <div className="flex flex-col gap-3">
-              {messages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <MessageBubble msg={m} />
-                </div>
-              ))}
+                {messages.length === 0 && (
+                  <div className="text-center text-white/95 py-12 text-lg">Say hi to Aarvi — she is listening. ❤️</div>
+                )}
+              </div>
+            </div>
+
+            {/* input */}
+            <div className="p-4 border-t border-white/10 bg-transparent rounded-b-2xl">
+              <div className="max-w-3xl mx-auto flex gap-3 items-center">
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Write something from the heart..."
+                  className="flex-1 min-h-[48px] max-h-36 resize-none px-4 py-3 rounded-xl focus:outline-none shadow-inner bg-white/90"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                />
+                <button
+                  onClick={handleSend}
+                  disabled={sending}
+                  className={`px-5 py-3 rounded-xl text-white font-semibold ${sending ? "bg-purple-400 cursor-not-allowed" : "bg-gradient-to-r from-pink-500 to-purple-600 hover:scale-105"}`}
+                >
+                  {sending ? "Sending..." : "Send"}
+                </button>
+              </div>
             </div>
           </div>
+        </main>
 
-          <div className="mt-4 border-t pt-4">
-            <div className="flex gap-2">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Share anything — Nyra cares."
-                className="flex-1 p-3 rounded-xl border resize-none focus:outline-none"
-                rows={2}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              />
-              <button onClick={handleSend} disabled={sending} className={`px-4 py-2 rounded-xl ${sending ? 'bg-gray-300' : 'bg-purple-600 text-white'}`}>
-                {sending ? 'Sending...' : 'Send'}
-              </button>
+        {/* Footer small */}
+        <footer className="p-3 text-center text-sm text-white/80">Made with care — keep your memories safe.</footer>
+      </div>
+
+      {/* Gallery modal */}
+      {showGallery && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setShowGallery(false)} />
+          <div className="relative z-10 max-w-xl w-full bg-white/95 rounded-2xl p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Choose background</h2>
+              <button onClick={() => setShowGallery(false)} className="text-gray-600 px-3 py-1 rounded hover:bg-gray-100">Close</button>
             </div>
-          </div>
-        </section>
 
-        {/* Right column — resources / gallery preview */}
-        <aside className="col-span-1 bg-white/90 rounded-2xl p-4 shadow sticky top-6 h-fit">
-          <h4 className="text-sm font-semibold">Mood & Prompts</h4>
-          <div className="mt-2 space-y-2">
-            <button className="w-full text-left p-2 rounded hover:bg-gray-50" onClick={() => { setInput('I am feeling stressed — can you help me relax?'); }}>
-              I feel stressed
-            </button>
-            <button className="w-full text-left p-2 rounded hover:bg-gray-50" onClick={() => { setInput('Give me a short study plan for today.'); }}>
-              Study plan
-            </button>
-            <button className="w-full text-left p-2 rounded hover:bg-gray-50" onClick={() => { setInput('Remind me to take breaks every 45 minutes.'); }}>
-              Set gentle reminders
-            </button>
-          </div>
-
-          <div className="mt-6">
-            <h4 className="text-sm font-semibold">Gallery preview</h4>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {galleryImages.slice(0, 4).map((s, i) => (
-                <button key={i} onClick={() => { setGalleryOpen(true); setGalleryIndex(i); }} className="rounded overflow-hidden">
-                  <img src={s} alt={`pre-${i}`} className="h-20 w-full object-cover" />
+            <div className="grid grid-cols-2 gap-4">
+              {backgroundOptions.map((fn) => (
+                <button
+                  key={fn}
+                  onClick={() => selectBackground(fn)}
+                  className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 ${selectedBackground === `/${fn}` ? "border-indigo-500" : "border-transparent"}`}
+                >
+                  <img src={`/${fn}`} alt={fn} className="w-full h-40 object-cover block" />
+                  <div className="p-2 text-sm text-center">{fn.replace(/[-.]/g, " ")}</div>
                 </button>
               ))}
             </div>
-          </div>
-        </aside>
-      </div>
 
-      {galleryOpen && <GalleryModal images={galleryImages} startIndex={galleryIndex} onClose={() => setGalleryOpen(false)} />}
+            
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-/*
-Notes:
-- Place gallery images inside `public/gallery/1.jpg`, `2.jpg`, etc.
-- This file is client-only and uses Tailwind for styling. Ensure Tailwind is configured.
-- For a more dynamic gallery, you can fetch image URLs from the DB (e.g., users_data.gallery array).
-- Consider adding animated micro-interactions (framer-motion) and accessible focus traps for the modal.
-*/
