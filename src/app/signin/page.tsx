@@ -1,91 +1,75 @@
-"use client";
+'use client';
 
-import { useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
+import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabaseClient';
+import AuthCard from '@/components/AuthCard';
+import PasswordInput from '@/components/PasswordInput';
 
 export default function SignInPage() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  // 🔹 Sign Up
-  const handleSignUp = async () => {
-    setLoading(true);
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-    setLoading(false);
+  const isValid = email.trim().length > 5 && password.length >= 6;
 
-    if (error) {
-      alert(error.message);
-      return;
+  async function handleSignIn(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!isValid) return alert('Please provide a valid email and password (6+ characters)');
+
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      setLoading(false);
+
+      if (error) {
+        throw error;
+      }
+
+      // Ensure user row exists — pass an array and a string for onConflict to satisfy types
+      await supabase.from('users_data').upsert([{ email }], { onConflict: 'email' });
+
+      // Redirect to home (protected route should also verify session)
+      router.push('/home');
+    } catch (err: any) {
+      setLoading(false);
+      alert(err?.message || 'Sign in failed');
     }
-
-    // naya user row insert karo
-    await supabase.from("users_data").upsert({ email });
-    alert("Account created! Check your email for verification.");
-  };
-
-  // 🔹 Sign In
-  const handleSignIn = async () => {
-    setLoading(true);
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    setLoading(false);
-
-    if (error) {
-      alert(error.message);
-      return;
-    }
-
-    // ensure row exist hai
-    await supabase.from("users_data").upsert({ email });
-
-    router.push("/home"); // ✅ login success → home page
-  };
+  }
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
-      <div className="bg-white shadow-lg rounded-2xl p-6 w-full max-w-sm">
-        <h1 className="text-2xl font-bold mb-6 text-center">Truemate Auth</h1>
+    <AuthCard title="Welcome back — Sign in">
+      <form className="space-y-4" onSubmit={handleSignIn}>
+        <label className="block">
+          <span className="text-sm font-medium">Email</span>
+          <input
+            type="email"
+            className="border p-3 rounded w-full mt-1"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+          />
+        </label>
 
-        <input
-          type="email"
-          placeholder="Email"
-          className="border p-2 mb-3 w-full rounded"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-
-        <input
-          type="password"
-          placeholder="Password"
-          className="border p-2 mb-3 w-full rounded"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-
-        <button
-          onClick={handleSignIn}
-          disabled={loading}
-          className="bg-blue-600 text-white w-full py-2 rounded mb-2 hover:bg-blue-700"
-        >
-          {loading ? "Signing in..." : "Sign In"}
-        </button>
+        <label className="block">
+          <span className="text-sm font-medium">Password</span>
+          <PasswordInput value={password} onChange={setPassword} placeholder="Your strong password" />
+        </label>
 
         <button
-          onClick={handleSignUp}
-          disabled={loading}
-          className="bg-green-600 text-white w-full py-2 rounded hover:bg-green-700"
+          type="submit"
+          disabled={!isValid || loading}
+          className="w-full py-3 rounded bg-blue-600 text-white font-medium disabled:opacity-60"
         >
-          {loading ? "Creating..." : "Sign Up"}
+          {loading ? 'Signing in...' : 'Sign In'}
         </button>
-      </div>
-    </div>
+
+        <div className="text-center text-sm">
+          Don't have an account? <a href="/signup" className="text-blue-600 underline">Create one</a>
+        </div>
+      </form>
+    </AuthCard>
   );
 }
