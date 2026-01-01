@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, Variants } from "framer-motion";
 import { Mail, Gamepad, Calendar, Award, Star } from "lucide-react";
@@ -34,6 +34,60 @@ const cardVariants: Variants = {
 export default function LandingPage(): React.JSX.Element {
   const router = useRouter();
 
+  // beforeinstallprompt handling
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [canInstall, setCanInstall] = useState(false);
+  const [installing, setInstalling] = useState(false);
+
+  useEffect(() => {
+    // listen for the event once
+    const handler = (e: Event) => {
+      // The event needs to be typed as any to access prompt()/userChoice in some browsers
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setCanInstall(true);
+    };
+
+    window.addEventListener("beforeinstallprompt", handler as EventListener);
+
+    return () => window.removeEventListener("beforeinstallprompt", handler as EventListener);
+  }, []);
+
+  const installApp = async () => {
+    if (!deferredPrompt) {
+      // nothing to do — maybe instruct iOS users to use "Add to Home Screen"
+      return;
+    }
+    try {
+      setInstalling(true);
+      // @ts-ignore: prompt() exists on the beforeinstallprompt event object
+      await (deferredPrompt as any).prompt();
+      // @ts-ignore
+      const choice = await (deferredPrompt as any).userChoice;
+      // optional: react to userChoice.outcome === 'accepted' | 'dismissed'
+      setDeferredPrompt(null);
+      setCanInstall(false);
+    } catch (err) {
+      console.warn("Install prompt failed:", err);
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  // Service Worker registration (client-only)
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker
+        .register("/sw.js")
+        .then((reg) => {
+          // console.log("Service worker registered:", reg);
+        })
+        .catch((err) => {
+          console.warn("Service worker registration failed:", err);
+        });
+    }
+  }, []);
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-gradient-to-b from-purple-600 via-indigo-700 to-slate-900 text-white">
       {/* Subtle animated glow layers */}
@@ -44,18 +98,9 @@ export default function LandingPage(): React.JSX.Element {
       </div>
 
       <div className="container mx-auto px-6 py-20 lg:py-32">
-        <motion.section
-          initial="hidden"
-          animate="show"
-          variants={containerVariants}
-          className="max-w-5xl mx-auto text-center"
-        >
+        <motion.section initial="hidden" animate="show" variants={containerVariants} className="max-w-5xl mx-auto text-center">
           {/* Hero Card */}
-          <motion.div
-            variants={cardVariants}
-            whileHover="hover"
-            className="relative overflow-hidden rounded-3xl bg-white/6 border border-white/10 backdrop-blur-md p-8 lg:p-12 shadow-2xl"
-          >
+          <motion.div variants={cardVariants} whileHover="hover" className="relative overflow-hidden rounded-3xl bg-white/6 border border-white/10 backdrop-blur-md p-8 lg:p-12 shadow-2xl">
             <div className="flex flex-col lg:flex-row items-center gap-8">
               <div className="flex-1 text-left">
                 <h1 className="text-4xl lg:text-5xl font-extrabold leading-tight">
@@ -86,6 +131,19 @@ export default function LandingPage(): React.JSX.Element {
                   >
                     Learn more
                   </button>
+
+                  {/* Install button appears if the browser fired beforeinstallprompt */}
+                  {canInstall && (
+                    <button
+                      type="button"
+                      onClick={installApp}
+                      disabled={installing}
+                      className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 px-4 py-2 text-sm font-semibold shadow-lg hover:scale-[1.02] transition-transform"
+                      aria-label="Install Truemate"
+                    >
+                      {installing ? "Installing..." : "Install App"}
+                    </button>
+                  )}
                 </div>
 
                 <div className="mt-6 text-xs text-gray-200/80">
@@ -105,27 +163,17 @@ export default function LandingPage(): React.JSX.Element {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="text-sm text-gray-300">Live Demo</div>
-                        <div className="font-semibold">Nyra • Your AI Friend</div>
+                        <div className="font-semibold">Aarvi • Your AI Friend</div>
                       </div>
                       <div className="text-xs text-green-300">Online</div>
                     </div>
 
                     <div className="mt-4 space-y-3">
-                      <motion.div
-                        initial={{ opacity: 0, x: 10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.12 }}
-                        className="text-sm bg-white/3 rounded-lg p-3"
-                      >
+                      <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.12 }} className="text-sm bg-white/3 rounded-lg p-3">
                         <div className="text-gray-100/90">Hey — ready for a 2-minute brain-teaser?</div>
                       </motion.div>
 
-                      <motion.div
-                        initial={{ opacity: 0, x: 10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.22 }}
-                        className="text-sm bg-white/3 rounded-lg p-3"
-                      >
+                      <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.22 }} className="text-sm bg-white/3 rounded-lg p-3">
                         <div className="text-gray-100/90">Collect daily badges and unlock secret replies.</div>
                       </motion.div>
                     </div>
@@ -148,12 +196,7 @@ export default function LandingPage(): React.JSX.Element {
           {/* Feature Grid */}
           <motion.div variants={containerVariants} className="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {features.map((f) => (
-              <motion.article
-                key={f.id}
-                variants={cardVariants}
-                whileHover={"hover"}
-                className="relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 backdrop-blur-md"
-              >
+              <motion.article key={f.id} variants={cardVariants} whileHover={"hover"} className="relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 backdrop-blur-md">
                 <div className="flex items-start gap-4">
                   <div className="rounded-lg bg-white/6 p-3" aria-hidden>
                     <f.Icon size={20} />
@@ -200,7 +243,7 @@ export default function LandingPage(): React.JSX.Element {
                 </div>
               </div>
 
-              <div className="mt-4 text-sm text-gray-200/80">Click start to reveal today&apos;s hidden interaction and win a badge.</div>
+              <div className="mt-4 text-sm text-gray-200/80">Click start to reveal today's hidden interaction and win a badge.</div>
 
               <button type="button" className="mt-4 w-full rounded-2xl bg-white text-indigo-700 font-semibold px-4 py-2">Reveal</button>
             </motion.aside>
