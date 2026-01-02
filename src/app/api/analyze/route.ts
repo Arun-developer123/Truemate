@@ -41,6 +41,25 @@ async function scheduleMessage(
   } = {}
 ) {
   try {
+    // avoid scheduling duplicates by checking existing pending with same text
+    try {
+      const check = await supabaseServer
+        .from("scheduled_messages")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("next_message_text", messageText)
+        .eq("status", "pending")
+        .limit(1)
+        .maybeSingle();
+
+      if (check?.data) {
+        return { ok: true, skipped: true, reason: "already_scheduled" };
+      }
+    } catch (chkErr) {
+      // ignore check errors and continue to attempt insert
+      console.warn("scheduleMessage duplicate-check failed:", chkErr);
+    }
+
     const payload = {
       user_id: userId,
       trigger_event: opts.trigger_event || "followup",
@@ -321,43 +340,74 @@ Return JSON ONLY in this schema (no extra text):
           "What are some short-term goals you'd like help with? (today / this week / this month)",
         ];
 
-        // Insert first onboarding message immediately into chat (assistant proactive)
-        const first = {
-          role: "assistant",
-          content: onboardingMessages[0],
-          proactive: true,
-          seen: false,
-          created_at: new Date().toISOString(),
-        };
+        const firstOnboardText = onboardingMessages[0];
 
-        const updatedChat = [...(user.chat || []), first];
-        const { error: updateError } = await supabaseServer
-          .from("users_data")
-          .update({
-            chat: updatedChat,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", userId);
+        // CHECK 1: If the first onboarding text already exists in user's chat, skip inserting it again
+        const hasOnboardingInChat = chatArr.some(
+          (m) =>
+            m &&
+            m.role === "assistant" &&
+            typeof m.content === "string" &&
+            m.content.includes("Before we start, what are 2") // small unique substring to identify the message
+        );
 
-        if (!updateError) {
-          // push preview for immediate onboarding question
-          try {
-            await fetch(`${baseUrl}/api/push/send`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                email: userEmail,
-                title: "Truemate: Let's get to know you",
-                body: onboardingMessages[0].slice(0, 120),
-                url: "/chat",
-              }),
-            });
-            pushSent = true;
-          } catch (pushErr) {
-            console.error("❌ push send error (onboarding immediate):", pushErr);
+        // CHECK 2: If there's already a pending scheduled 'onboarding' message for this user, skip immediate insert
+        let existingScheduledOnboarding = null;
+        try {
+          const sch = await supabaseServer
+            .from("scheduled_messages")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("trigger_event", "onboarding")
+            .eq("status", "pending")
+            .limit(1)
+            .maybeSingle();
+          existingScheduledOnboarding = sch?.data || null;
+        } catch (schErr) {
+          console.warn("scheduled_messages check failed:", schErr);
+        }
+
+        if (!hasOnboardingInChat && !existingScheduledOnboarding) {
+          // Insert first onboarding message immediately into chat (assistant proactive)
+          const first = {
+            role: "assistant",
+            content: firstOnboardText,
+            proactive: true,
+            seen: false,
+            created_at: new Date().toISOString(),
+          };
+
+          const updatedChat = [...(user.chat || []), first];
+          const { error: updateError } = await supabaseServer
+            .from("users_data")
+            .update({
+              chat: updatedChat,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", userId);
+
+          if (!updateError) {
+            // push preview for immediate onboarding question
+            try {
+              await fetch(`${baseUrl}/api/push/send`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  email: userEmail,
+                  title: "Truemate: Let's get to know you",
+                  body: firstOnboardText.slice(0, 120),
+                  url: "/chat",
+                }),
+              });
+              pushSent = true;
+            } catch (pushErr) {
+              console.error("❌ push send error (onboarding immediate):", pushErr);
+            }
+          } else {
+            console.error("❌ Failed to add onboarding immediate message to chat:", updateError.message);
           }
         } else {
-          console.error("❌ Failed to add onboarding immediate message to chat:", updateError.message);
+          console.log("ℹ️ Skipping immediate onboarding message (already present or scheduled).");
         }
 
         // Schedule subsequent onboarding messages at +1h, +24h, +72h
@@ -365,6 +415,7 @@ Return JSON ONLY in this schema (no extra text):
         for (let i = 1; i < onboardingMessages.length; i++) {
           const msg = onboardingMessages[i];
           const when = scheduleTimes[i - 1] || addDaysToNow(1);
+          // scheduleMessage internally checks duplicates by next_message_text + user_id + pending status
           const resSchedule = await scheduleMessage(baseUrl, userEmail, userId, msg, when, {
             trigger_event: "onboarding",
             priority: 6,
@@ -391,7 +442,7 @@ ${lastMessages}
 Task:
 1) Propose up to 3 follow-up messages the assistant can send to continue the conversation helpfully (short, friendly, and personalized).
 2) For each message, suggest WHEN to send it as "hours_from_now" (numeric), and give "priority" (1-10) and "urgency" (true/false).
-3) Return JSON only: [{ "text": "...", "hours_from_now": 8, "priority": 6, "urgency": false }, ...]
+3) Return JSON only: [{ "text": "...", "hours_from_now": 24, "priority": 6, "urgency": false }, ...]
 If unsure, return an empty array.
 `;
 
@@ -435,11 +486,11 @@ If unsure, return an empty array.
         }
 
         if (followUps.length === 0) {
-          // fallback single check-in after 8h
+          // fallback single check-in after 4h
           followUps = [
             {
               text: "Hey — just checking in. How have you been since we last talked?",
-              hours_from_now: 8,
+              hours_from_now: 4,
               priority: 5,
               urgency: false,
             },
