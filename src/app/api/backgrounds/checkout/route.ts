@@ -11,7 +11,8 @@ export async function POST(req: Request) {
   // 1) validate env early so we return clear messages
   const stripeSecret = process.env.STRIPE_SECRET_KEY;
   const priceId = process.env.STRIPE_BACKGROUND_PRICE_ID;
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `http://localhost:3000`;
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
+
 
   if (!stripeSecret) {
     console.error("STRIPE_SECRET_KEY is missing in env");
