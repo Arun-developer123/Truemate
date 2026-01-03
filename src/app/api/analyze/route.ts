@@ -307,19 +307,30 @@ Return JSON ONLY in this schema (no extra text):
       }
     }
 
-    // 6. Save user's original message into chat history (user message) (original)
-    try {
-      const newChat = [...(user.chat || []), { role: "user", content: message, created_at: new Date().toISOString() }];
-      await supabaseServer
-        .from("users_data")
-        .update({
-          chat: newChat,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", userId);
-    } catch (saveErr) {
-      console.error("❌ Saving user chat failed:", saveErr);
-    }
+    // 6. Save user's original message into chat history (avoid duplicate)
+try {
+  const existingChat: any[] = Array.isArray(user.chat) ? user.chat : [];
+
+  // check last few user messages to avoid accidental duplicates
+  const lastUserMsgs = existingChat.slice(-3).filter((m) => m && m.role === "user" && typeof m.content === "string");
+  const alreadyExists = lastUserMsgs.some((m) => m.content === message);
+
+  if (!alreadyExists) {
+    const newChat = [...existingChat, { role: "user", content: message, created_at: new Date().toISOString() }];
+    await supabaseServer
+      .from("users_data")
+      .update({
+        chat: newChat,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", userId);
+  } else {
+    console.log("ℹ️ Skipping saving user message — duplicate detected.");
+  }
+} catch (saveErr) {
+  console.error("❌ Saving user chat failed:", saveErr);
+}
+
 
     // ---------------------------
     // NEW: Follow-ups / Onboarding (non-destructive, additional)

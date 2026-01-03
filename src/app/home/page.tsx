@@ -19,6 +19,13 @@ type Message = {
   seen?: boolean;
 };
 
+type BackgroundItem = {
+  name: string;
+  isUnlocked: boolean;
+  thumbUrl: string;
+  signedUrl?: string | null;
+};
+
 // --- Component ---
 export default function HomePage(): React.JSX.Element {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -32,8 +39,11 @@ export default function HomePage(): React.JSX.Element {
   const [selectedBackground, setSelectedBackground] = useState<string>("/aarvi.jpg");
   const router = useRouter();
 
-  // Gallery images (put these in /public)
+  // Gallery images (put these in /public) - kept for fallback if needed
   const backgroundOptions = ["aarvi.jpg", "aarvi-1.jpg", "aarvi-2.jpg", "aarvi-3.jpg"];
+
+  // New: backgrounds loaded from server
+  const [backgrounds, setBackgrounds] = useState<BackgroundItem[]>([]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -95,6 +105,36 @@ export default function HomePage(): React.JSX.Element {
     };
     getUser();
   }, [router]);
+
+  // --- Load gallery items from server ---
+  useEffect(() => {
+  if (!userEmail) return;
+  const load = async () => {
+    try {
+      const res = await fetch(`/api/backgrounds/list?email=${encodeURIComponent(userEmail)}`);
+      const json = await res.json();
+      if (json?.ok && Array.isArray(json.items)) {
+        // Fix any broken thumbUrl that was accidentally created using undefined env var
+        const fixed = json.items.map((it: any) => {
+          const name = it.name;
+          let thumbUrl = it.thumbUrl || `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
+          // defensive: if thumbUrl contains "undefined/" or doesn't start with http/"/", fallback to relative path
+          if (typeof thumbUrl === "string" && (thumbUrl.includes("undefined/") || !/^\/|https?:\/\//.test(thumbUrl))) {
+            thumbUrl = `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
+          }
+          return { ...it, thumbUrl };
+        });
+        setBackgrounds(fixed);
+      } else {
+        console.warn("backgrounds list returned no items:", json);
+      }
+    } catch (e) {
+      console.warn("Failed to load backgrounds", e);
+    }
+  };
+  load();
+}, [userEmail]);
+
 
   // --- Realtime listener for chat updates ---
   useEffect(() => {
@@ -274,9 +314,64 @@ export default function HomePage(): React.JSX.Element {
     router.push("/signin");
   };
 
-  // --- Gallery select ---
-  const selectBackground = (filename: string) => {
-    setSelectedBackground(`/${filename}`);
+  // --- Gallery helpers ---
+  const backgroundUrlFor = (it: BackgroundItem) => {
+    return it.isUnlocked ? it.signedUrl || it.thumbUrl : it.thumbUrl;
+  };
+
+  const isSelected = (it: BackgroundItem) => {
+    try {
+      return selectedBackground && selectedBackground.endsWith(it.name);
+    } catch {
+      return false;
+    }
+  };
+
+  const startCheckout = async (file: string) => {
+  if (!userEmail) return alert("Please sign in.");
+  try {
+    const res = await fetch("/api/backgrounds/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: userEmail, file }),
+    });
+
+    // try parse JSON first, but fall back to text for debugging
+    let json: any = null;
+    try {
+      json = await res.json();
+    } catch (e) {
+      // ignore
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => null);
+      console.error("Checkout failed:", json ?? text ?? res.status);
+      alert("Purchase failed. Check console for details.");
+      return;
+    }
+
+    if (json?.url) {
+      window.location.href = json.url;
+    } else {
+      const text = await res.text().catch(() => null);
+      console.error("Checkout response missing url:", json ?? text);
+      alert("Purchase failed. Try again.");
+    }
+  } catch (e) {
+    console.error("checkout error", e);
+    alert("Checkout failed due to network error.");
+  }
+};
+
+
+  // --- Gallery select (keeps existing saveBackgroundPreference behavior) ---
+  const selectBackground = (filename: string, signedUrl?: string | null) => {
+    if (signedUrl) {
+      setSelectedBackground(signedUrl);
+    } else {
+      setSelectedBackground(`/${filename}`);
+    }
     saveBackgroundPreference(filename);
     setShowGallery(false);
   };
@@ -427,19 +522,44 @@ export default function HomePage(): React.JSX.Element {
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              {backgroundOptions.map((fn) => (
-                <button
-                  key={fn}
-                  onClick={() => selectBackground(fn)}
-                  className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 ${selectedBackground === `/${fn}` ? "border-indigo-500" : "border-transparent"}`}
-                >
-                  <img src={`/${fn}`} alt={fn} className="w-full h-40 object-cover block" />
-                  <div className="p-2 text-sm text-center">{fn.replace(/[-.]/g, " ")}</div>
-                </button>
-              ))}
+              {backgrounds.length > 0 ? (
+                backgrounds.map((it) => (
+                  <div key={it.name} className="relative">
+                    <button
+                      onClick={() => {
+                        if (it.isUnlocked) {
+                          selectBackground(it.name, it.signedUrl || null);
+                        } else {
+                          startCheckout(it.name);
+                        }
+                      }}
+                      className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 w-full text-left ${isSelected(it) ? "border-indigo-500" : "border-transparent"}`}
+                    >
+                      <img src={it.thumbUrl} alt={it.name} className="w-full h-40 object-cover block" />
+                      <div className="p-2 text-sm text-center flex items-center justify-between">
+                        <span className="truncate w-3/4">{it.name.replace(/[-.]/g, " ")}</span>
+                        <span className="text-xs w-1/4 text-right">{it.isUnlocked ? "Unlocked" : "Locked"}</span>
+                      </div>
+                    </button>
+                    {!it.isUnlocked && (
+                      <div className="absolute top-2 left-2 bg-black/40 px-2 py-1 rounded text-white text-[11px]">Pay to unlock</div>
+                    )}
+                  </div>
+                ))
+              ) : (
+                // fallback: original local options (unchanged behaviour)
+                backgroundOptions.map((fn) => (
+                  <button
+                    key={fn}
+                    onClick={() => selectBackground(fn)}
+                    className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 ${selectedBackground === `/${fn}` ? "border-indigo-500" : "border-transparent"}`}
+                  >
+                    <img src={`/${fn}`} alt={fn} className="w-full h-40 object-cover block" />
+                    <div className="p-2 text-sm text-center">{fn.replace(/[-.]/g, " ")}</div>
+                  </button>
+                ))
+              )}
             </div>
-
-            
           </div>
         </div>
       )}
