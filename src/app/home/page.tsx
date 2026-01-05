@@ -108,33 +108,32 @@ export default function HomePage(): React.JSX.Element {
 
   // --- Load gallery items from server ---
   useEffect(() => {
-  if (!userEmail) return;
-  const load = async () => {
-    try {
-      const res = await fetch(`/api/backgrounds/list?email=${encodeURIComponent(userEmail)}`);
-      const json = await res.json();
-      if (json?.ok && Array.isArray(json.items)) {
-        // Fix any broken thumbUrl that was accidentally created using undefined env var
-        const fixed = json.items.map((it: any) => {
-          const name = it.name;
-          let thumbUrl = it.thumbUrl || `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
-          // defensive: if thumbUrl contains "undefined/" or doesn't start with http/"/", fallback to relative path
-          if (typeof thumbUrl === "string" && (thumbUrl.includes("undefined/") || !/^\/|https?:\/\//.test(thumbUrl))) {
-            thumbUrl = `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
-          }
-          return { ...it, thumbUrl };
-        });
-        setBackgrounds(fixed);
-      } else {
-        console.warn("backgrounds list returned no items:", json);
+    if (!userEmail) return;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/backgrounds/list?email=${encodeURIComponent(userEmail)}`);
+        const json = await res.json();
+        if (json?.ok && Array.isArray(json.items)) {
+          // Fix any broken thumbUrl that was accidentally created using undefined env var
+          const fixed = json.items.map((it: any) => {
+            const name = it.name;
+            let thumbUrl = it.thumbUrl || `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
+            // defensive: if thumbUrl contains "undefined/" or doesn't start with http/"/", fallback to relative path
+            if (typeof thumbUrl === "string" && (thumbUrl.includes("undefined/") || !/^\/|https?:\/\//.test(thumbUrl))) {
+              thumbUrl = `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
+            }
+            return { ...it, thumbUrl };
+          });
+          setBackgrounds(fixed);
+        } else {
+          console.warn("backgrounds list returned no items:", json);
+        }
+      } catch (e) {
+        console.warn("Failed to load backgrounds", e);
       }
-    } catch (e) {
-      console.warn("Failed to load backgrounds", e);
-    }
-  };
-  load();
-}, [userEmail]);
-
+    };
+    load();
+  }, [userEmail]);
 
   // --- Realtime listener for chat updates ---
   useEffect(() => {
@@ -328,42 +327,41 @@ export default function HomePage(): React.JSX.Element {
   };
 
   const startCheckout = async (file: string) => {
-  if (!userEmail) return alert("Please sign in.");
-  try {
-    const res = await fetch("/api/backgrounds/checkout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: userEmail, file }),
-    });
-
-    // try parse JSON first, but fall back to text for debugging
-    let json: any = null;
+    if (!userEmail) return alert("Please sign in.");
     try {
-      json = await res.json();
+      const res = await fetch("/api/backgrounds/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: userEmail, file }),
+      });
+
+      // try parse JSON first, but fall back to text for debugging
+      let json: any = null;
+      try {
+        json = await res.json();
+      } catch (e) {
+        // ignore
+      }
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => null);
+        console.error("Checkout failed:", json ?? text ?? res.status);
+        alert("Purchase failed. Check console for details.");
+        return;
+      }
+
+      if (json?.url) {
+        window.location.href = json.url;
+      } else {
+        const text = await res.text().catch(() => null);
+        console.error("Checkout response missing url:", json ?? text);
+        alert("Purchase failed. Try again.");
+      }
     } catch (e) {
-      // ignore
+      console.error("checkout error", e);
+      alert("Checkout failed due to network error.");
     }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => null);
-      console.error("Checkout failed:", json ?? text ?? res.status);
-      alert("Purchase failed. Check console for details.");
-      return;
-    }
-
-    if (json?.url) {
-      window.location.href = json.url;
-    } else {
-      const text = await res.text().catch(() => null);
-      console.error("Checkout response missing url:", json ?? text);
-      alert("Purchase failed. Try again.");
-    }
-  } catch (e) {
-    console.error("checkout error", e);
-    alert("Checkout failed due to network error.");
-  }
-};
-
+  };
 
   // --- Gallery select (keeps existing saveBackgroundPreference behavior) ---
   const selectBackground = (filename: string, signedUrl?: string | null) => {
@@ -526,6 +524,13 @@ export default function HomePage(): React.JSX.Element {
                 backgrounds.map((it) => (
                   <div key={it.name} className="relative">
                     <button
+                      // Prevent context menu (right-click) for locked items so user can't "Open image in new tab"
+                      onContextMenu={(e) => {
+                        if (!it.isUnlocked) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }
+                      }}
                       onClick={() => {
                         if (it.isUnlocked) {
                           selectBackground(it.name, it.signedUrl || null);
@@ -535,14 +540,44 @@ export default function HomePage(): React.JSX.Element {
                       }}
                       className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 w-full text-left ${isSelected(it) ? "border-indigo-500" : "border-transparent"}`}
                     >
-                      <img src={it.thumbUrl} alt={it.name} className="w-full h-40 object-cover block" />
+                      {/* Image: blur when locked. Also disable drag to make it harder to open/save */}
+                      <img
+                        src={it.thumbUrl}
+                        alt={it.name}
+                        draggable={false}
+                        onDragStart={(e) => e.preventDefault()}
+                        className={`w-full h-40 object-cover block transition-transform duration-300 ${it.isUnlocked ? "" : "filter blur-sm scale-105"}`}
+                      />
+
+                      {/* Text row */}
                       <div className="p-2 text-sm text-center flex items-center justify-between">
                         <span className="truncate w-3/4">{it.name.replace(/[-.]/g, " ")}</span>
                         <span className="text-xs w-1/4 text-right">{it.isUnlocked ? "Unlocked" : "Locked"}</span>
                       </div>
                     </button>
+
+                    {/* Lock overlay & icon for locked items */}
                     {!it.isUnlocked && (
-                      <div className="absolute top-2 left-2 bg-black/40 px-2 py-1 rounded text-white text-[11px]">Pay to unlock</div>
+                      <>
+                        {/* subtle dark overlay so the blurred image reads as locked */}
+                        <div className="absolute inset-0 pointer-events-none rounded-xl overflow-hidden">
+                          <div className="absolute inset-0 bg-black/25 rounded-xl" />
+                        </div>
+
+                        {/* centered lock icon */}
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <div className="bg-white/90 rounded-full p-2 shadow-lg">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-gray-800" viewBox="0 0 24 24" fill="none">
+                              <path d="M12 17a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="currentColor" />
+                              <path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                              <rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </div>
+                        </div>
+
+                        {/* small top-left badge */}
+                        <div className="absolute top-2 left-2 bg-black/40 px-2 py-1 rounded text-white text-[11px]">Pay to unlock</div>
+                      </>
                     )}
                   </div>
                 ))
@@ -554,7 +589,7 @@ export default function HomePage(): React.JSX.Element {
                     onClick={() => selectBackground(fn)}
                     className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 ${selectedBackground === `/${fn}` ? "border-indigo-500" : "border-transparent"}`}
                   >
-                    <img src={`/${fn}`} alt={fn} className="w-full h-40 object-cover block" />
+                    <img src={`/${fn}`} alt={fn} className="w-full h-40 object-cover block" draggable={false} onDragStart={(e) => e.preventDefault()} />
                     <div className="p-2 text-sm text-center">{fn.replace(/[-.]/g, " ")}</div>
                   </button>
                 ))
