@@ -5,6 +5,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { registerServiceWorkerAndSubscribe } from "@/lib/pushClient";
+import { registerPushForUser } from "@/lib/registerPush";
 
 // NOTE: If you want to persist background choices in DB, add this column to your users_data table:
 // ALTER TABLE public.users_data ADD COLUMN IF NOT EXISTS background_image text;
@@ -32,6 +33,7 @@ export default function HomePage(): React.JSX.Element {
   const messagesRef = useRef<Message[]>([]);
   const [input, setInput] = useState("");
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [user, setUser] = useState<any | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [sending, setSending] = useState(false);
   const [showGallery, setShowGallery] = useState(false);
@@ -69,6 +71,7 @@ export default function HomePage(): React.JSX.Element {
       }
       const email = data.user.email ?? null;
       setUserEmail(email);
+      setUser(data.user); // <--- set user so registerPushForUser can use user.id
 
       if (email) {
         // First try to fetch chat + background_image (if column exists)
@@ -105,6 +108,15 @@ export default function HomePage(): React.JSX.Element {
     };
     getUser();
   }, [router]);
+
+  // --- Register push for user (call once user.id available) ---
+  useEffect(() => {
+    if (!user?.id) return;
+    // fire-and-forget registration; it will request permission and save token
+    registerPushForUser(user.id).catch((err) => {
+      console.warn("registerPushForUser failed:", err);
+    });
+  }, [user?.id]);
 
   // --- Load gallery items from server ---
   useEffect(() => {
