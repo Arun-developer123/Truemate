@@ -7,11 +7,16 @@ import { supabase } from "@/lib/supabaseClient";
 const VAPID_KEY = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY as string | undefined;
 
 /**
- * Register push notifications for a signed-in user
- * - Requests permission
- * - Registers service worker
- * - Gets FCM token
- * - Saves token to Supabase
+ * Safe registerPushForUser (no upsert, robust)
+ *
+ * Flow:
+ *  - requests notification permission
+ *  - registers service worker
+ *  - gets FCM token
+ *  - SELECT existing (user_id + platform)
+ *    -> if exists and token unchanged: update updated_at
+ *    -> if exists and token changed: update push_token
+ *    -> if not exists: insert new row
  */
 export async function registerPushForUser(userId: string): Promise<string | null> {
   try {
@@ -22,9 +27,9 @@ export async function registerPushForUser(userId: string): Promise<string | null
       return null;
     }
 
+    // Warn if VAPID missing but continue because getToken sometimes works without it in dev
     if (!VAPID_KEY) {
-      console.error("[push] missing NEXT_PUBLIC_FIREBASE_VAPID_KEY");
-      return null;
+      console.warn("[push] missing NEXT_PUBLIC_FIREBASE_VAPID_KEY (VAPID_KEY). Continuing but check env.");
     }
 
     // Init Firebase Messaging
@@ -33,22 +38,21 @@ export async function registerPushForUser(userId: string): Promise<string | null
     // Ask notification permission
     const permission = await Notification.requestPermission();
     console.log("[push] notification permission:", permission);
-
     if (permission !== "granted") {
       console.warn("[push] notification permission not granted");
       return null;
     }
 
-    // Register Service Worker
+    // Register Service Worker at root
     if ("serviceWorker" in navigator) {
       try {
         const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-        console.log("[push] service worker registered:", reg);
+        console.log("[push] serviceWorker registered:", reg);
       } catch (swErr) {
-        console.warn("[push] service worker registration failed:", swErr);
+        console.warn("[push] serviceWorker register failed (may be already registered):", swErr);
       }
     } else {
-      console.warn("[push] serviceWorker not supported");
+      console.warn("[push] serviceWorker not supported in this browser");
     }
 
     // Get FCM token
@@ -66,27 +70,63 @@ export async function registerPushForUser(userId: string): Promise<string | null
       return null;
     }
 
-    // Save token to Supabase (upsert)
-    const upsertRow = [
-      {
-        user_id: userId,
-        push_token: token,
-        platform: "web",
-        updated_at: new Date().toISOString(),
-      },
-    ];
-
-    const { data, error } = await supabase
+    // ---------- Safe DB flow: SELECT -> UPDATE or INSERT ----------
+    const { data: existingRows, error: selErr } = await supabase
       .from("user_push_tokens")
-      .upsert(upsertRow, { onConflict: "user_id,push_token" })
-      .select();
+      .select("*")
+      .eq("user_id", userId)
+      .eq("platform", "web")
+      .limit(1);
 
-    console.log("[push] upsert result:", { data, error });
+    if (selErr) {
+      console.error("[push] select existing error:", selErr);
+      // We'll still attempt insert below if no existing found
+    }
 
-    // Fallback insert (safety)
-    if (error) {
-      console.warn("[push] upsert failed, trying insert fallback");
+    const existing = Array.isArray(existingRows) && existingRows.length > 0 ? existingRows[0] : null;
 
+    if (existing) {
+      // If token unchanged, just update updated_at and skip heavy ops
+      if (existing.push_token === token) {
+        const { data: udata, error: uerr } = await supabase
+          .from("user_push_tokens")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", existing.id)
+          .select();
+        console.log("[push] token unchanged; updated_at result:", { udata, uerr });
+      } else {
+        // token changed -> update record by id
+        const { data: udata, error: uerr } = await supabase
+          .from("user_push_tokens")
+          .update({ push_token: token, updated_at: new Date().toISOString() })
+          .eq("id", existing.id)
+          .select();
+        console.log("[push] updated existing token result:", { udata, uerr });
+        if (uerr) {
+          console.error("[push] update error:", uerr);
+          // Fall through to insert attempt if update is blocked
+          // (rare, but ensures we don't silently fail)
+          try {
+            const { data: insData, error: insErr } = await supabase
+              .from("user_push_tokens")
+              .insert([
+                {
+                  user_id: userId,
+                  push_token: token,
+                  platform: "web",
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                },
+              ])
+              .select();
+            console.log("[push] insert fallback after update error:", { insData, insErr });
+          } catch (e) {
+            console.error("[push] insert fallback fatal:", e);
+          }
+        }
+      }
+    } else {
+      // No existing row: insert new
       const { data: insData, error: insErr } = await supabase
         .from("user_push_tokens")
         .insert([
@@ -95,24 +135,23 @@ export async function registerPushForUser(userId: string): Promise<string | null
             push_token: token,
             platform: "web",
             created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
           },
         ])
         .select();
-
-      console.log("[push] insert fallback result:", { insData, insErr });
-
-      if (insErr) return null;
+      console.log("[push] insert result:", { insData, insErr });
+      if (insErr) {
+        console.error("[push] insert error:", insErr);
+      }
     }
 
     // Foreground message handler
-    onMessage(messaging, (payload) => {
-      console.log("[push] foreground message:", payload);
-    });
+    onMessage(messaging, (payload) => console.log("[push] foreground payload:", payload));
 
-    console.log("[push] registration successful");
+    console.log("[push] registration finished");
     return token;
   } catch (err) {
-    console.error("[push] registerPushForUser fatal error:", err);
+    console.error("[push] registerPushForUser fatal:", err);
     return null;
   }
 }
