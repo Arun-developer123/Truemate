@@ -1,43 +1,72 @@
 // src/lib/registerPush.ts
 import { initMessaging } from "@/lib/firebase";
 import { getToken, onMessage, Messaging } from "firebase/messaging";
-import { supabase } from "@/lib/supabaseClient"; // adjust path if needed
+import { supabase } from "@/lib/supabaseClient";
 
-// Ensure environment variable typing - may be undefined in some envs
+// Public VAPID key (Firebase Web Push)
 const VAPID_KEY = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY as string | undefined;
 
 /**
- * Register push for a signed-in user and save the FCM token to Supabase.
- * Returns the token string or null on failure.
+ * Register push notifications for a signed-in user
+ * - Requests permission
+ * - Registers service worker
+ * - Gets FCM token
+ * - Saves token to Supabase
  */
 export async function registerPushForUser(userId: string): Promise<string | null> {
   try {
-    if (!VAPID_KEY) {
-      console.warn("Missing NEXT_PUBLIC_FIREBASE_VAPID_KEY in env. Push registration skipped.");
+    console.log("[push] start registerPushForUser", { userId });
+
+    if (!userId) {
+      console.error("[push] missing userId");
       return null;
     }
 
-    const messaging: Messaging = initMessaging();
-
-    // Ask permission
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") return null;
-
-    // Register service worker at root (ensure /firebase-messaging-sw.js exists)
-    if ("serviceWorker" in navigator) {
-      try {
-        await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-      } catch (swErr) {
-        console.warn("Service worker registration failed", swErr);
-        // continue — getToken may still work if sw already registered
-      }
+    if (!VAPID_KEY) {
+      console.error("[push] missing NEXT_PUBLIC_FIREBASE_VAPID_KEY");
+      return null;
     }
 
-    // Get FCM token (vapidKey required for web)
-    const token = await getToken(messaging, { vapidKey: VAPID_KEY });
-    if (!token) return null;
+    // Init Firebase Messaging
+    const messaging: Messaging = initMessaging();
 
-    // Upsert token into Supabase (pass array and onConflict as comma-separated string)
+    // Ask notification permission
+    const permission = await Notification.requestPermission();
+    console.log("[push] notification permission:", permission);
+
+    if (permission !== "granted") {
+      console.warn("[push] notification permission not granted");
+      return null;
+    }
+
+    // Register Service Worker
+    if ("serviceWorker" in navigator) {
+      try {
+        const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+        console.log("[push] service worker registered:", reg);
+      } catch (swErr) {
+        console.warn("[push] service worker registration failed:", swErr);
+      }
+    } else {
+      console.warn("[push] serviceWorker not supported");
+    }
+
+    // Get FCM token
+    let token: string | null = null;
+    try {
+      token = await getToken(messaging, { vapidKey: VAPID_KEY });
+      console.log("[push] FCM token:", token);
+    } catch (err) {
+      console.error("[push] getToken error:", err);
+      return null;
+    }
+
+    if (!token) {
+      console.warn("[push] token is null or empty");
+      return null;
+    }
+
+    // Save token to Supabase (upsert)
     const upsertRow = [
       {
         user_id: userId,
@@ -47,24 +76,43 @@ export async function registerPushForUser(userId: string): Promise<string | null
       },
     ];
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("user_push_tokens")
-      .upsert(upsertRow, { onConflict: "user_id,push_token" });
+      .upsert(upsertRow, { onConflict: "user_id,push_token" })
+      .select();
 
+    console.log("[push] upsert result:", { data, error });
+
+    // Fallback insert (safety)
     if (error) {
-      console.error("Failed to save push token", error);
-      return null;
+      console.warn("[push] upsert failed, trying insert fallback");
+
+      const { data: insData, error: insErr } = await supabase
+        .from("user_push_tokens")
+        .insert([
+          {
+            user_id: userId,
+            push_token: token,
+            platform: "web",
+            created_at: new Date().toISOString(),
+          },
+        ])
+        .select();
+
+      console.log("[push] insert fallback result:", { insData, insErr });
+
+      if (insErr) return null;
     }
 
-    // Handle foreground messages (app open)
+    // Foreground message handler
     onMessage(messaging, (payload) => {
-      console.log("Foreground message received:", payload);
-      // Show in-app toast or update local state here
+      console.log("[push] foreground message:", payload);
     });
 
+    console.log("[push] registration successful");
     return token;
   } catch (err) {
-    console.error("registerPushForUser error", err);
+    console.error("[push] registerPushForUser fatal error:", err);
     return null;
   }
 }
