@@ -73,6 +73,24 @@ export default function HomePage(): React.JSX.Element {
       setUserEmail(email);
       setUser(data.user); // <--- set user so registerPushForUser can use user.id
 
+      // --- NEW: upsert presence row: mark user online when they hit /home or login ---
+      try {
+        if (data.user?.id) {
+          await supabase
+            .from("user_presence")
+            .upsert(
+              {
+                user_id: data.user.id,
+                is_online: true,
+                last_active_at: new Date().toISOString(),
+              },
+              { onConflict: "user_id" }
+            );
+        }
+      } catch (e) {
+        console.warn("user_presence upsert failed:", e);
+      }
+
       if (email) {
         // First try to fetch chat + background_image (if column exists)
         let existingData: any = null;
@@ -314,13 +332,44 @@ export default function HomePage(): React.JSX.Element {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [userEmail]);
 
+  // --- NEW: Mark offline on tab close / refresh (best-effort) ---
+  useEffect(() => {
+    const handler = async () => {
+      if (!user?.id) return;
+      try {
+        await supabase
+          .from("user_presence")
+          .update({ is_online: false, last_active_at: new Date().toISOString() })
+          .eq("user_id", user.id);
+      } catch (e) {
+        // This may not always complete before the page unloads — it's a best-effort attempt.
+        console.warn("Presence update on unload failed:", e);
+      }
+    };
+
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [user?.id]);
+
   useEffect(() => {
     const handleFocus = () => setUnreadCount(0);
     window.addEventListener("focus", handleFocus);
     return () => window.removeEventListener("focus", handleFocus);
   }, []);
 
+  // --- Sign out (also mark offline) ---
   const handleSignOut = async () => {
+    try {
+      if (user?.id) {
+        await supabase
+          .from("user_presence")
+          .update({ is_online: false, last_active_at: new Date().toISOString() })
+          .eq("user_id", user.id);
+      }
+    } catch (e) {
+      console.warn("Presence update failed on sign out:", e);
+    }
+
     await supabase.auth.signOut();
     router.push("/signin");
   };
