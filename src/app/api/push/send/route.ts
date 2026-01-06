@@ -7,9 +7,7 @@ const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:admin@yourdomain.com"
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "BChtvKlTMe224bK7gQN32u9IqtXG1ehzcdh0dB0aPWoI1fkAviIcCHXGUVdvd6cN1wTWhOqVZ5uqwCpgkonuqZ0";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "mr8uM1M-cxtMnKQWFpX13GDeiy_PrI9fHzN_vmJwtsI";
 
-if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
-  console.warn("VAPID keys not set for web-push");
-}
+
 
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
