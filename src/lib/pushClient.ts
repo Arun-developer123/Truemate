@@ -1,4 +1,3 @@
-// src/lib/pushClient.ts
 export function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
@@ -8,34 +7,15 @@ export function urlBase64ToUint8Array(base64String: string) {
   return outputArray;
 }
 
-export async function registerServiceWorkerAndSubscribe(vapidPublicKey: string, email: string) {
-  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-    console.warn("Push messaging not supported");
-    return null;
-  }
-
+export async function ensureServiceWorkerRegistered(swPath = "/firebase-messaging-sw.js") {
+  if (typeof window === "undefined") return null;
+  if (!("serviceWorker" in navigator)) return null;
   try {
-    // 1) register service worker
-    const registration = await navigator.serviceWorker.register("/sw.js");
-    // 2) get existing subscription if exists
-    let subscription = await registration.pushManager.getSubscription();
-    if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-      });
-    }
-
-    // 3) send subscription to server
-    await fetch("/api/push/subscribe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subscription, email }),
-    });
-
-    return subscription;
+    const reg = await navigator.serviceWorker.register(swPath);
+    console.log("[push] SW registered at", swPath, reg);
+    return reg;
   } catch (err) {
-    console.error("subscribe failed", err);
+    console.warn("[push] SW register failed", err);
     return null;
   }
 }

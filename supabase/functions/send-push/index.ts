@@ -11,12 +11,30 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const FIREBASE_PROJECT_ID = Deno.env.get("FIREBASE_PROJECT_ID")!;
 const FIREBASE_CLIENT_EMAIL = Deno.env.get("FIREBASE_CLIENT_EMAIL")!;
-const FIREBASE_PRIVATE_KEY = Deno.env.get("FIREBASE_PRIVATE_KEY")!.replace(/\\n/g, "\n");
+const FIREBASE_PRIVATE_KEY = Deno.env.get("FIREBASE_PRIVATE_KEY")!; // could be real newlines or escaped "\n"
 
 // ---------- SUPABASE ----------
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // ---------- HELPERS ----------
+// helper: convert PEM string (with real newlines or "\n") to ArrayBuffer of DER bytes
+function pemToArrayBuffer(pem: string): ArrayBuffer {
+  // support either real newlines or escaped \n sequences
+  const normalized = pem.replace(/\\n/g, "\n");
+  // remove header/footer and non-base64 chars (whitespace)
+  const b64 = normalized
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s+/g, "");
+  if (!b64) throw new Error("PEM base64 content is empty after stripping headers.");
+  // atob -> binary string -> uint8array
+  const binary = atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
 async function getAccessToken(): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
@@ -34,14 +52,31 @@ async function getAccessToken(): Promise<string> {
 
   const unsignedJWT = `${enc(jwtHeader)}.${enc(jwtClaimSet)}`;
 
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    new TextEncoder().encode(FIREBASE_PRIVATE_KEY),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
+  // --- PEM -> ArrayBuffer (DER)
+  let keyData: ArrayBuffer;
+  try {
+    keyData = pemToArrayBuffer(FIREBASE_PRIVATE_KEY);
+  } catch (e) {
+    console.error("[send-push] pemToArrayBuffer failed:", (e as Error)?.message ?? e);
+    throw new Error("Invalid FIREBASE_PRIVATE_KEY format");
+  }
 
+  // import the pkcs8 DER key properly
+  let key: CryptoKey;
+  try {
+    key = await crypto.subtle.importKey(
+      "pkcs8",
+      keyData,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+  } catch (e) {
+    console.error("[send-push] importKey failed:", e);
+    throw e;
+  }
+
+  // sign
   const signature = await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
     key,
@@ -53,6 +88,7 @@ async function getAccessToken(): Promise<string> {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")}`;
 
+  // exchange for access token
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -62,9 +98,18 @@ async function getAccessToken(): Promise<string> {
     }),
   });
 
-  const data = await res.json();
-  if (!data.access_token) throw new Error("Failed to obtain access token");
-
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    console.error("[send-push] token response not JSON:", { status: res.status, bodyText: text });
+    throw new Error("Failed to obtain access token (non-JSON response)");
+  }
+  if (!data.access_token) {
+    console.error("[send-push] token response missing access_token:", { status: res.status, body: data });
+    throw new Error("Failed to obtain access token");
+  }
   return data.access_token as string;
 }
 
@@ -115,15 +160,15 @@ serve(async (req) => {
       .select("push_token")
       .eq("user_id", user_id);
 
-    if (!tokens || tokens.length === 0) {
+    if (!tokens || (Array.isArray(tokens) && tokens.length === 0)) {
       return new Response(JSON.stringify({ ok: true, sent: 0 }), { status: 200 });
     }
 
     await Promise.all(
-      tokens.map((t) => sendPush(t.push_token, title, body, url || "/chat")),
+      (tokens as Array<{ push_token: string }>).map((t) => sendPush(t.push_token, title, body, url || "/chat")),
     );
 
-    return new Response(JSON.stringify({ ok: true, sent: tokens.length }), {
+    return new Response(JSON.stringify({ ok: true, sent: (tokens as any).length }), {
       headers: { "Content-Type": "application/json" },
     });
   } catch (err) {

@@ -4,7 +4,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
-import { registerServiceWorkerAndSubscribe } from "@/lib/pushClient";
+// NOTE: use namespace import so TS doesn't complain about missing named export
+import * as pushClient from "@/lib/pushClient";
 import { registerPushForUser } from "@/lib/registerPush";
 
 // NOTE: If you want to persist background choices in DB, add this column to your users_data table:
@@ -18,6 +19,8 @@ type Message = {
   proactive?: boolean;
   created_at?: string;
   seen?: boolean;
+  // optional scheduled message id (present for scheduled messages)
+  scheduled_message_id?: string;
 };
 
 type BackgroundItem = {
@@ -31,6 +34,7 @@ type BackgroundItem = {
 export default function HomePage(): React.JSX.Element {
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesRef = useRef<Message[]>([]);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [input, setInput] = useState("");
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [user, setUser] = useState<any | null>(null);
@@ -131,7 +135,7 @@ export default function HomePage(): React.JSX.Element {
   useEffect(() => {
     if (!user?.id) return;
     // fire-and-forget registration; it will request permission and save token
-    registerPushForUser(user.id).catch((err) => {
+    registerPushForUser(user.id).catch((err: any) => {
       console.warn("registerPushForUser failed:", err);
     });
   }, [user?.id]);
@@ -235,20 +239,40 @@ export default function HomePage(): React.JSX.Element {
     }
   }, []);
 
-  // --- Register service worker ---
+  // --- Register service worker (fixed: use pushClient namespace + typed handlers) ---
   useEffect(() => {
     if (!userEmail) return;
     if (typeof window !== "undefined" && "serviceWorker" in navigator && Notification.permission === "granted") {
-      const vapid = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-      if (!vapid) {
-        console.warn("NEXT_PUBLIC_VAPID_PUBLIC_KEY not set — push subscribe skipped");
-        return;
+      // call the function if it's present on the module (defensive)
+      try {
+        const fn = (pushClient as any).ensureServiceWorkerRegistered;
+        if (typeof fn === "function") {
+          fn("/firebase-messaging-sw.js")
+            .then((reg: any) => {
+              if (reg) console.log("Service worker registered at /firebase-messaging-sw.js", reg);
+            })
+            .catch((err: any) => {
+              console.warn("Service worker registration failed:", err);
+            });
+        } else {
+          // fallback: try other known function name if available (defensive - won't change behavior)
+          const alt = (pushClient as any).registerServiceWorkerAndSubscribe;
+          if (typeof alt === "function") {
+            alt("/firebase-messaging-sw.js")
+              .then((reg: any) => {
+                if (reg) console.log("Service worker registered (alt) at /firebase-messaging-sw.js", reg);
+              })
+              .catch((err: any) => {
+                console.warn("Service worker registration failed (alt):", err);
+              });
+          } else {
+            // No-op: the module didn't export a known SW helper; silently skip.
+            // This preserves behaviour without throwing a TS import error.
+          }
+        }
+      } catch (err: any) {
+        console.warn("Service worker registration helper failed:", err);
       }
-      registerServiceWorkerAndSubscribe(vapid, userEmail)
-        .then((sub) => {
-          if (sub) console.log("Push subscribed (client).");
-        })
-        .catch((err) => console.warn("Push subscription failed:", err));
     }
   }, [userEmail]);
 
@@ -314,7 +338,7 @@ export default function HomePage(): React.JSX.Element {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: userEmail, message: input }),
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error("handleSend failed:", err);
     } finally {
       setSending(false);
@@ -446,6 +470,74 @@ export default function HomePage(): React.JSX.Element {
     }
   };
 
+  // --- NEW: scrollToMessage & openChatWithAarvi (deep-link handling) ---
+  function scrollToMessage(scheduledId: string) {
+    if (!scheduledId) return;
+    try {
+      const el = containerRef.current?.querySelector(`[data-scheduled-id="${scheduledId}"]`) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("highlight-pulse");
+        setTimeout(() => el.classList.remove("highlight-pulse"), 3000);
+        return;
+      }
+      // fallback: if not found, scroll to bottom
+      containerRef.current?.scrollTo({ top: containerRef.current.scrollHeight, behavior: "smooth" });
+    } catch (e) {
+      console.warn("scrollToMessage failed:", e);
+    }
+  }
+
+  function openChatWithAarvi() {
+    try {
+      const nodes = containerRef.current?.querySelectorAll(`[data-role="assistant"][data-source="scheduled"]`);
+      if (nodes && nodes.length > 0) {
+        const el = nodes[nodes.length - 1] as HTMLElement;
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("highlight-pulse");
+        setTimeout(() => el.classList.remove("highlight-pulse"), 3000);
+        return;
+      }
+      containerRef.current?.scrollTo({ top: containerRef.current.scrollHeight, behavior: "smooth" });
+    } catch (e) {
+      console.warn("openChatWithAarvi failed:", e);
+    }
+  }
+
+  // on mount: check URL params for deep-link and listen for SW postMessage navigation fallback
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("open") === "aarvi") {
+        const id = params.get("scheduled_message_id");
+        if (id) {
+          scrollToMessage(id);
+        } else {
+          openChatWithAarvi();
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    const swHandler = (ev: MessageEvent) => {
+      try {
+        const msg = ev.data;
+        if (msg?.type === "navigate" && msg?.url) {
+          const url = new URL(msg.url, window.location.origin);
+          const id = url.searchParams.get("scheduled_message_id");
+          if (id) scrollToMessage(id);
+          else openChatWithAarvi();
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    navigator.serviceWorker?.addEventListener("message", swHandler);
+    return () => navigator.serviceWorker?.removeEventListener("message", swHandler);
+  }, []);
+
   return (
     <div className="flex flex-col h-screen relative bg-gray-50">
       {/* Dynamic background - make image clearly visible: lighter, minimal overlay, no blur */}
@@ -516,17 +608,25 @@ export default function HomePage(): React.JSX.Element {
             </div>
 
             {/* messages list */}
-            <div className="p-6 overflow-y-auto flex-1" id="chat-scroll">
+            <div className="p-6 overflow-y-auto flex-1" id="chat-scroll" ref={containerRef}>
               <div className="space-y-4">
                 {messages.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[70%] p-4 rounded-2xl shadow-md break-words text-sm leading-relaxed ${
-                      msg.role === "user"
-                        ? "bg-indigo-700/90 text-white rounded-br-none backdrop-blur-sm"
-                        : msg.proactive
-                        ? "bg-yellow-50/90 text-yellow-900 border border-yellow-300"
-                        : "bg-white/80 text-gray-900 backdrop-blur-sm"
-                    }`}>
+                  <div
+                    key={i}
+                    className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                    data-scheduled-id={msg.scheduled_message_id || ""}
+                    data-role={msg.role}
+                    data-source={(msg as any).source || ""}
+                  >
+                    <div
+                      className={`max-w-[70%] p-4 rounded-2xl shadow-md break-words text-sm leading-relaxed ${
+                        msg.role === "user"
+                          ? "bg-indigo-700/90 text-white rounded-br-none backdrop-blur-sm"
+                          : msg.proactive
+                          ? "bg-yellow-50/90 text-yellow-900 border border-yellow-300"
+                          : "bg-white/80 text-gray-900 backdrop-blur-sm"
+                      }`}
+                    >
                       <div className="whitespace-pre-wrap">{msg.content}</div>
                       <div className="text-[11px] mt-2 text-gray-600 text-right">{formatTime(msg.created_at)}</div>
                     </div>
