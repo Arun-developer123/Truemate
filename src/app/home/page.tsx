@@ -48,6 +48,11 @@ export default function HomePage(): React.JSX.Element {
   const [selectedBackground, setSelectedBackground] = useState<string>("/aarvi.jpg");
   const router = useRouter();
 
+  // NEW: menu state and ref for 3-dots menu
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [subMenuOpen, setSubMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
   // Gallery images (put these in /public) - kept for fallback if needed
   const backgroundOptions = ["aarvi.jpg", "aarvi-1.jpg", "aarvi-2.jpg", "aarvi-3.jpg"];
 
@@ -133,6 +138,18 @@ export default function HomePage(): React.JSX.Element {
     };
     getUser();
   }, [router]);
+
+  // close menu when clicking outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuOpen && menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+        setSubMenuOpen(false);
+      }
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [menuOpen]);
 
   // --- Register push for user (call once user.id available) ---
   useEffect(() => {
@@ -369,144 +386,144 @@ export default function HomePage(): React.JSX.Element {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [userEmail]);
 
-// --- Presence & reliable offline handling (production-ready) ---
-const userIdRef = useRef<string | null>(null);
-const lastPresenceUpdateRef = useRef<number>(0);
-const PRESENCE_THROTTLE_MS = 30_000; // at most one DB write every 30s
-const UNLOAD_BEACON_PATH = "/api/presence"; // optional API route for sendBeacon fallback
+  // --- Presence & reliable offline handling (production-ready) ---
+  const userIdRef = useRef<string | null>(null);
+  const lastPresenceUpdateRef = useRef<number>(0);
+  const PRESENCE_THROTTLE_MS = 30_000; // at most one DB write every 30s
+  const UNLOAD_BEACON_PATH = "/api/presence"; // optional API route for sendBeacon fallback
 
-// keep userIdRef up-to-date so unload handler has latest id
-useEffect(() => {
-  userIdRef.current = user?.id ?? null;
-}, [user?.id]);
+  // keep userIdRef up-to-date so unload handler has latest id
+  useEffect(() => {
+    userIdRef.current = user?.id ?? null;
+  }, [user?.id]);
 
-/**
- * Mark presence server-side.
- * 1) If `useBeacon` and navigator.sendBeacon available, attempt a beacon to a lightweight API route (fast on unload).
- *    You may implement this serverless API to accept the payload and update Supabase (recommended).
- * 2) Otherwise fall back to Supabase client `upsert`.
- *
- * NOTE: We throttle actual writes to avoid DB spam when user is rapidly switching visibility/focus.
- */
-const markPresence = async (isOnline: boolean, useBeacon = false) => {
-  const userId = userIdRef.current;
-  if (!userId) return;
+  /**
+   * Mark presence server-side.
+   * 1) If `useBeacon` and navigator.sendBeacon available, attempt a beacon to a lightweight API route (fast on unload).
+   *    You may implement this serverless API to accept the payload and update Supabase (recommended).
+   * 2) Otherwise fall back to Supabase client `upsert`.
+   *
+   * NOTE: We throttle actual writes to avoid DB spam when user is rapidly switching visibility/focus.
+   */
+  const markPresence = async (isOnline: boolean, useBeacon = false) => {
+    const userId = userIdRef.current;
+    if (!userId) return;
 
-  const now = new Date().toISOString();
-  const nowTs = Date.now();
-  // throttle frequent writes
-  if (!isOnline && nowTs - lastPresenceUpdateRef.current < 2000) {
-    // allow immediate offline transitions if they happen quickly (small guard)
-    // but generally respect throttle
-  } else if (nowTs - lastPresenceUpdateRef.current < PRESENCE_THROTTLE_MS) {
-    return;
-  }
-  lastPresenceUpdateRef.current = nowTs;
-
-  // prefer sendBeacon for unload scenarios (fast, best-effort)
-  if (useBeacon && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
-    try {
-      const payload = JSON.stringify({ user_id: userId, is_online: isOnline, last_active_at: now });
-      // If you don't have this API route, create a simple serverless route that upserts to user_presence.
-      navigator.sendBeacon(UNLOAD_BEACON_PATH, new Blob([payload], { type: "application/json" }));
+    const now = new Date().toISOString();
+    const nowTs = Date.now();
+    // throttle frequent writes
+    if (!isOnline && nowTs - lastPresenceUpdateRef.current < 2000) {
+      // allow immediate offline transitions if they happen quickly (small guard)
+      // but generally respect throttle
+    } else if (nowTs - lastPresenceUpdateRef.current < PRESENCE_THROTTLE_MS) {
       return;
-    } catch (e) {
-      // fallback to client update below
-      console.warn("sendBeacon failed, falling back to supabase update:", e);
     }
-  }
+    lastPresenceUpdateRef.current = nowTs;
 
-  // fallback: use Supabase client (best-effort in normal runtime; may not complete on unload)
-  try {
-    await supabase
-      .from("user_presence")
-      .upsert(
-        {
-          user_id: userId,
-          is_online: isOnline,
-          last_active_at: now,
-        },
-        { onConflict: "user_id" }
-      );
-  } catch (e) {
-    console.warn("markPresence supabase upsert failed:", e);
-  }
-};
-
-// Set user online when tab becomes visible / focused
-useEffect(() => {
-  if (!user?.id) return;
-
-  // mark online immediately when this effect runs (user landed on page)
-  markPresence(true).catch((e) => console.warn("initial markPresence(true) failed:", e));
-
-  const onVisibilityChange = () => {
-    if (document.visibilityState === "visible") {
-      markPresence(true).catch((e) => console.warn("visibility->visible markPresence failed:", e));
-    } else {
-      // when hiding, mark offline (best-effort) but don't block
-      markPresence(false).catch((e) => console.warn("visibility->hidden markPresence failed:", e));
+    // prefer sendBeacon for unload scenarios (fast, best-effort)
+    if (useBeacon && typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+      try {
+        const payload = JSON.stringify({ user_id: userId, is_online: isOnline, last_active_at: now });
+        // If you don't have this API route, create a simple serverless route that upserts to user_presence.
+        navigator.sendBeacon(UNLOAD_BEACON_PATH, new Blob([payload], { type: "application/json" }));
+        return;
+      } catch (e) {
+        // fallback to client update below
+        console.warn("sendBeacon failed, falling back to supabase update:", e);
+      }
     }
-  };
 
-  const onFocus = () => markPresence(true).catch((e) => console.warn("focus markPresence failed:", e));
-  const onBlur = () => markPresence(false).catch((e) => console.warn("blur markPresence failed:", e));
-
-  window.addEventListener("visibilitychange", onVisibilityChange);
-  window.addEventListener("focus", onFocus);
-  window.addEventListener("blur", onBlur);
-
-  return () => {
-    window.removeEventListener("visibilitychange", onVisibilityChange);
-    window.removeEventListener("focus", onFocus);
-    window.removeEventListener("blur", onBlur);
-  };
-  // only depend on user id (handlers refer to userIdRef)
-}, [user?.id]);
-
-// Use beforeunload to best-effort mark offline using sendBeacon (fast) then fallback to async update
-useEffect(() => {
-  const beforeUnloadHandler = (ev?: BeforeUnloadEvent) => {
-    // try beacon when available for reliability on page unload
-    // useBeacon = true to prefer navigator.sendBeacon (non-blocking)
+    // fallback: use Supabase client (best-effort in normal runtime; may not complete on unload)
     try {
-      markPresence(false, true);
+      await supabase
+        .from("user_presence")
+        .upsert(
+          {
+            user_id: userId,
+            is_online: isOnline,
+            last_active_at: now,
+          },
+          { onConflict: "user_id" }
+        );
     } catch (e) {
-      console.warn("beforeunload markPresence failed:", e);
+      console.warn("markPresence supabase upsert failed:", e);
     }
-
-    // Optionally set a returnValue to prompt; we don't prompt so nothing set.
-    if (ev) ev.returnValue = "";
   };
 
-  window.addEventListener("beforeunload", beforeUnloadHandler, { passive: true });
-  return () => window.removeEventListener("beforeunload", beforeUnloadHandler);
-}, []);
+  // Set user online when tab becomes visible / focused
+  useEffect(() => {
+    if (!user?.id) return;
 
-// Reset unread count on focus (keeps UX snappy)
-useEffect(() => {
-  const handleFocus = () => setUnreadCount(0);
-  window.addEventListener("focus", handleFocus);
-  return () => window.removeEventListener("focus", handleFocus);
-}, []);
+    // mark online immediately when this effect runs (user landed on page)
+    markPresence(true).catch((e) => console.warn("initial markPresence(true) failed:", e));
 
-// Sign out helper: mark offline (waits for upsert to complete) then sign out and redirect
-const handleSignOut = async () => {
-  try {
-    // ensure presence marked offline before sign out
-    await markPresence(false, false); // prefer direct DB update here
-  } catch (e) {
-    console.warn("Presence update failed on sign out:", e);
-  }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        markPresence(true).catch((e) => console.warn("visibility->visible markPresence failed:", e));
+      } else {
+        // when hiding, mark offline (best-effort) but don't block
+        markPresence(false).catch((e) => console.warn("visibility->hidden markPresence failed:", e));
+      }
+    };
 
-  try {
-    await supabase.auth.signOut();
-  } catch (e) {
-    console.warn("supabase.auth.signOut failed:", e);
-  }
+    const onFocus = () => markPresence(true).catch((e) => console.warn("focus markPresence failed:", e));
+    const onBlur = () => markPresence(false).catch((e) => console.warn("blur markPresence failed:", e));
 
-  router.push("/signin");
-};
+    window.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+
+    return () => {
+      window.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+    };
+    // only depend on user id (handlers refer to userIdRef)
+  }, [user?.id]);
+
+  // Use beforeunload to best-effort mark offline using sendBeacon (fast) then fallback to async update
+  useEffect(() => {
+    const beforeUnloadHandler = (ev?: BeforeUnloadEvent) => {
+      // try beacon when available for reliability on page unload
+      // useBeacon = true to prefer navigator.sendBeacon (non-blocking)
+      try {
+        markPresence(false, true);
+      } catch (e) {
+        console.warn("beforeunload markPresence failed:", e);
+      }
+
+      // Optionally set a returnValue to prompt; we don't prompt so nothing set.
+      if (ev) ev.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", beforeUnloadHandler, { passive: true });
+    return () => window.removeEventListener("beforeunload", beforeUnloadHandler);
+  }, []);
+
+  // Reset unread count on focus (keeps UX snappy)
+  useEffect(() => {
+    const handleFocus = () => setUnreadCount(0);
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, []);
+
+  // Sign out helper: mark offline (waits for upsert to complete) then sign out and redirect
+  const handleSignOut = async () => {
+    try {
+      // ensure presence marked offline before sign out
+      await markPresence(false, false); // prefer direct DB update here
+    } catch (e) {
+      console.warn("Presence update failed on sign out:", e);
+    }
+
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn("supabase.auth.signOut failed:", e);
+    }
+
+    router.push("/signin");
+  };
 
 
   // --- Gallery helpers ---
@@ -696,47 +713,94 @@ const handleSignOut = async () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-  <button
-    className="px-3 py-2 bg-white/90 rounded-xl shadow hover:scale-105 transition-transform flex items-center gap-2"
-    onClick={() => setShowGallery(true)}
-    aria-label="Open gallery"
-  >
-    {/* existing SVG/icon */}
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-      <path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5z" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M21 15l-5-5-3 3-4-4L3 17" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-    <span className="text-sm font-medium">Gallery</span>
-  </button>
+          {/* RIGHT SIDE: replaced visible buttons with 3-dots menu */}
+          <div className="flex items-center gap-2 relative" ref={menuRef}>
+            <button
+              aria-haspopup="true"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((s) => !s)}
+              className="p-2 rounded-full bg-white/90 shadow hover:scale-105 transition-transform"
+              title="Menu"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                <circle cx="5" cy="12" r="1.6" fill="#6b21a8" />
+                <circle cx="12" cy="12" r="1.6" fill="#6b21a8" />
+                <circle cx="19" cy="12" r="1.6" fill="#6b21a8" />
+              </svg>
+            </button>
 
-  {/* SUBSCRIBE BUTTONS: paste these */}
-  <div className="hidden sm:flex items-center gap-2">
-    <SubscribeButton
-      priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_MONTHLY!}
-      email={user?.email || ""}
-      userId={user?.id || ""}
-      label="Subscribe $15/mo"
-    />
-    <SubscribeButton
-      priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_6MONTH!}
-      email={user?.email || ""}
-      userId={user?.id || ""}
-      label="Subscribe $75 / 6mo"
-    />
-    <SubscribeButton
-      priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_YEARLY!}
-      email={user?.email || ""}
-      userId={user?.id || ""}
-      label="Subscribe $140/yr"
-    />
-  </div>
+            {/* Dropdown menu */}
+            {menuOpen && (
+              <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 z-50 overflow-hidden">
+                <button
+                  onClick={() => {
+                    setShowGallery(true);
+                    setMenuOpen(false);
+                    setSubMenuOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-3 hover:bg-gray-50"
+                >
+                  Gallery
+                </button>
 
-  <button onClick={handleSignOut} className="bg-red-500 text-white px-3 py-2 rounded-xl shadow hover:bg-red-600">
-    Sign Out
-  </button>
-</div>
+                <div className="border-t border-gray-100" />
 
+                {/* Subscription menu toggle */}
+                <div>
+                  <button
+                    onClick={() => setSubMenuOpen((s) => !s)}
+                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50"
+                    aria-haspopup="true"
+                    aria-expanded={subMenuOpen}
+                  >
+                    <span>Subscription</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" className={`w-4 h-4 transform ${subMenuOpen ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none">
+                      <path d="M9 6l6 6-6 6" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+
+                  {/* Submenu: price buttons */}
+                  {subMenuOpen && (
+                    <div className="px-3 pb-3 pt-2 bg-white">
+                      <div className="space-y-2">
+                        <SubscribeButton
+                          priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_MONTHLY!}
+                          email={user?.email || ""}
+                          userId={user?.id || ""}
+                          label="Subscribe $15/mo"
+                        />
+                        <SubscribeButton
+                          priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_6MONTH!}
+                          email={user?.email || ""}
+                          userId={user?.id || ""}
+                          label="Subscribe $75 / 6mo"
+                        />
+                        <SubscribeButton
+                          priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_YEARLY!}
+                          email={user?.email || ""}
+                          userId={user?.id || ""}
+                          label="Subscribe $140/yr"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-gray-100" />
+
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setSubMenuOpen(false);
+                    handleSignOut();
+                  }}
+                  className="w-full text-left px-4 py-3 text-red-600 hover:bg-gray-50"
+                >
+                  Sign Out
+                </button>
+              </div>
+            )}
+          </div>
         </header>
 
         {/* Chat area */}
