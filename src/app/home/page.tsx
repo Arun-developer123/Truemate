@@ -48,7 +48,7 @@ export default function HomePage(): React.JSX.Element {
   const [selectedBackground, setSelectedBackground] = useState<string>("/aarvi.jpg");
   const router = useRouter();
 
-  // NEW: menu state and ref for 3-dots menu
+  // Dropdown menu state & refs (NEW)
   const [menuOpen, setMenuOpen] = useState(false);
   const [subMenuOpen, setSubMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -139,18 +139,6 @@ export default function HomePage(): React.JSX.Element {
     getUser();
   }, [router]);
 
-  // close menu when clicking outside
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuOpen && menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-        setSubMenuOpen(false);
-      }
-    };
-    document.addEventListener("click", handler);
-    return () => document.removeEventListener("click", handler);
-  }, [menuOpen]);
-
   // --- Register push for user (call once user.id available) ---
   useEffect(() => {
     if (!user?.id) return;
@@ -173,7 +161,7 @@ export default function HomePage(): React.JSX.Element {
             const name = it.name;
             let thumbUrl = it.thumbUrl || `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
             // defensive: if thumbUrl contains "undefined/" or doesn't start with http/"/", fallback to relative path
-            if (typeof thumbUrl === "string" && (thumbUrl.includes("undefined/") || !/^\/|https?:\/\//.test(thumbUrl))) {
+            if (typeof thumbUrl === "string" && (thumbUrl.includes("undefined/") || !/^\//.test(thumbUrl) && !/^https?:\/\//.test(thumbUrl))) {
               thumbUrl = `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
             }
             return { ...it, thumbUrl };
@@ -525,6 +513,28 @@ export default function HomePage(): React.JSX.Element {
     router.push("/signin");
   };
 
+  // Close menu on outside click / escape
+  useEffect(() => {
+    const onDocClick = (ev: MouseEvent) => {
+      if (!menuRef.current) return;
+      if (ev.target instanceof Node && !menuRef.current.contains(ev.target)) {
+        setMenuOpen(false);
+        setSubMenuOpen(false);
+      }
+    };
+    const onEsc = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        setMenuOpen(false);
+        setSubMenuOpen(false);
+      }
+    };
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, []);
 
   // --- Gallery helpers ---
   const backgroundUrlFor = (it: BackgroundItem) => {
@@ -713,55 +723,64 @@ export default function HomePage(): React.JSX.Element {
             </div>
           </div>
 
-          {/* RIGHT SIDE: replaced visible buttons with 3-dots menu */}
-          <div className="flex items-center gap-2 relative" ref={menuRef}>
+          {/* RIGHT: three-dot menu (replaces direct buttons) */}
+          <div className="relative" ref={menuRef}>
             <button
               aria-haspopup="true"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((s) => !s)}
               className="p-2 rounded-full bg-white/90 shadow hover:scale-105 transition-transform"
-              title="Menu"
+              title="Open menu"
             >
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none">
-                <circle cx="5" cy="12" r="1.6" fill="#6b21a8" />
-                <circle cx="12" cy="12" r="1.6" fill="#6b21a8" />
-                <circle cx="19" cy="12" r="1.6" fill="#6b21a8" />
+              {/* three dots icon */}
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-gray-800" viewBox="0 0 24 24" fill="none">
+                <circle cx="5" cy="12" r="1.8" fill="currentColor" />
+                <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+                <circle cx="19" cy="12" r="1.8" fill="currentColor" />
               </svg>
             </button>
 
-            {/* Dropdown menu */}
+            {/* menu dropdown */}
             {menuOpen && (
-              <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 z-50 overflow-hidden">
+              <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-xl ring-1 ring-black/10 p-2 z-50">
                 <button
                   onClick={() => {
                     setShowGallery(true);
                     setMenuOpen(false);
                     setSubMenuOpen(false);
                   }}
-                  className="w-full text-left px-4 py-3 hover:bg-gray-50"
+                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 flex items-center gap-2"
                 >
-                  Gallery
+                  {/* gallery icon */}
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                    <path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5z" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M21 15l-5-5-3 3-4-4L3 17" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="text-sm">Gallery</span>
                 </button>
 
-                <div className="border-t border-gray-100" />
+                <div className="border-t my-1" />
 
-                {/* Subscription menu toggle */}
                 <div>
                   <button
                     onClick={() => setSubMenuOpen((s) => !s)}
-                    className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50"
-                    aria-haspopup="true"
-                    aria-expanded={subMenuOpen}
+                    className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 flex items-center justify-between gap-2"
                   >
-                    <span>Subscription</span>
+                    <div className="flex items-center gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 6v6l4 2" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                        <rect x="3" y="3" width="18" height="18" rx="2" stroke="#6b21a8" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <span className="text-sm">Subscriptions</span>
+                    </div>
                     <svg xmlns="http://www.w3.org/2000/svg" className={`w-4 h-4 transform ${subMenuOpen ? "rotate-90" : ""}`} viewBox="0 0 24 24" fill="none">
-                      <path d="M9 6l6 6-6 6" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M9 18l6-6-6-6" stroke="#6b21a8" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   </button>
 
-                  {/* Submenu: price buttons */}
+                  {/* subscription submenu */}
                   {subMenuOpen && (
-                    <div className="px-3 pb-3 pt-2 bg-white">
+                    <div className="mt-2 mx-2 p-2 rounded-lg bg-gray-50 border border-gray-100">
                       <div className="space-y-2">
                         <SubscribeButton
                           priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_MONTHLY!}
@@ -786,17 +805,15 @@ export default function HomePage(): React.JSX.Element {
                   )}
                 </div>
 
-                <div className="border-t border-gray-100" />
+                <div className="border-t my-1" />
 
-                <button
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setSubMenuOpen(false);
-                    handleSignOut();
-                  }}
-                  className="w-full text-left px-4 py-3 text-red-600 hover:bg-gray-50"
-                >
-                  Sign Out
+                <button onClick={handleSignOut} className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 flex items-center gap-2">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none">
+                    <path d="M16 17l5-5-5-5" stroke="#ef4444" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M21 12H9" stroke="#ef4444" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                    <rect x="3" y="3" width="12" height="18" rx="2" stroke="#ef4444" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <span className="text-sm text-red-600">Sign Out</span>
                 </button>
               </div>
             )}
