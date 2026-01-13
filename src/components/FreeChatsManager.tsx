@@ -146,7 +146,7 @@ export default function FreeChatsManager({
 
               {/* Yearly */}
               <div className="p-4 border rounded-lg text-center">
-                <div className="text-2xl font-semibold">$149</div>
+                <div className="text-2xl font-semibold">$140</div>
                 <div className="text-xs text-gray-500">per year</div>
                 <div className="mt-3 text-sm">Great value — save across the year</div>
                 <div className="mt-4">
@@ -154,7 +154,7 @@ export default function FreeChatsManager({
                     priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_YEARLY || "PRICE_YEARLY_ID"}
                     email={userEmail || ""}
                     userId={userId || ""}
-                    label="Subscribe $149/yr"
+                    label="Subscribe $140/yr"
                   />
                 </div>
               </div>
