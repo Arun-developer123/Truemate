@@ -36,8 +36,6 @@ export default function HomePage(): React.JSX.Element {
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesRef = useRef<Message[]>([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // --- ADDED: recentPushesRef for deduping SW notifications vs client notifications ---
-  const recentPushesRef = useRef<Set<string>>(new Set());
   const [input, setInput] = useState("");
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [user, setUser] = useState<any | null>(null);
@@ -194,22 +192,7 @@ export default function HomePage(): React.JSX.Element {
       setMessages(clean);
 
       const latest = clean[clean.length - 1];
-      if (latest?.role === "assistant" && latest?.proactive && !latest?.seen) {
-        setUnreadCount((c) => c + 1);
-
-        // Dedupe: if it's a scheduled message and SW just handled it, skip native Notification
-        const scheduledId = latest?.scheduled_message_id;
-        const recentlyPushed = !!(scheduledId && recentPushesRef.current.has(scheduledId));
-
-        // Only show client notification if:
-        //  - SW didn't already show it (recentlyPushed === false)
-        //  - AND tab is hidden (optional) — you can remove visibility check if you want notifications even when visible
-        if (!recentlyPushed && (document.visibilityState === "hidden" || typeof document === "undefined")) {
-          if (typeof window !== "undefined" && Notification.permission === "granted") {
-            new Notification("Truemate", { body: latest.content, icon: "/icon.png" });
-          }
-        }
-      }
+      
     };
 
     const channel = supabase
@@ -669,14 +652,7 @@ export default function HomePage(): React.JSX.Element {
           return;
         }
 
-        // NEW: push-received message from SW (postMessage)
-        if (msg?.type === "push-received" && msg?.scheduled_message_id) {
-          const id = String(msg.scheduled_message_id);
-          recentPushesRef.current.add(id);
-          // remove after 10s — short window to dedupe realtime update
-          setTimeout(() => recentPushesRef.current.delete(id), 10000);
-          return;
-        }
+        
       } catch (e) {
         // ignore
       }
