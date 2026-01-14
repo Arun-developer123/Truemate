@@ -1,4 +1,3 @@
-// src/app/api/stripe/webhook/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
@@ -31,9 +30,13 @@ export async function POST(req: Request) {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as any;
       const metadata: any = session.metadata || {};
-      const email = metadata.email;
+      const emailFromMetadata = metadata.email;
       const file = metadata.file;
       const userIdMetadata = metadata.userId;
+
+      // unify email: prefer session.customer_email then metadata
+      const email = session.customer_email || emailFromMetadata || null;
+      const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
 
       // 1) If metadata.file exists -> unlock gallery background (your previous logic)
       if (email && file) {
@@ -69,6 +72,32 @@ export async function POST(req: Request) {
           }
         } catch (e) {
           console.error("Failed to mark unlocked:", e);
+        }
+      }
+
+      // 1.a) Ensure stripe_customer_id set on users_data (if we have email or userId)
+      if (customerId && (email || userIdMetadata)) {
+        try {
+          // try to update by userId first (stronger)
+          if (userIdMetadata) {
+            const { error: uErr } = await supabaseServer
+              .from("users_data")
+              .update({ stripe_customer_id: customerId })
+              .eq("id", userIdMetadata);
+            if (uErr) console.warn("Could not set stripe_customer_id by userId:", uErr);
+          }
+
+          // fallback: update by email
+          if (email) {
+            const { error: eErr } = await supabaseServer
+              .from("users_data")
+              .update({ stripe_customer_id: customerId })
+              .eq("email", email);
+            if (eErr) console.warn("Could not set stripe_customer_id by email:", eErr);
+            else console.log(`Linked stripe customer ${customerId} -> ${email}`);
+          }
+        } catch (e) {
+          console.error("Failed to set stripe_customer_id in checkout.session.completed:", e);
         }
       }
 
@@ -110,7 +139,10 @@ export async function POST(req: Request) {
   async function handleSubscriptionUpdate(subscription: any, stripeInstance: any) {
     try {
       const customerId = typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id;
-      if (!customerId) return;
+      if (!customerId) {
+        console.warn("Subscription has no customer id, skipping DB update.");
+        return;
+      }
 
       const status = subscription.status; // active, past_due, canceled, incomplete, etc.
       const current_period_end = subscription.current_period_end
@@ -130,13 +162,58 @@ export async function POST(req: Request) {
         updates.free_chats_remaining = 30;
       }
 
-      const { error: updateErr } = await supabaseServer
+      // Primary attempt: update row(s) by stripe_customer_id
+      const { data: rowsByCustomer, error: lookupErr } = await supabaseServer
         .from("users_data")
-        .update(updates)
+        .select("id, email")
         .eq("stripe_customer_id", customerId);
 
-      if (updateErr) console.error("Failed to update subscription status in DB:", updateErr);
-      else console.log(`Updated subscription for customer ${customerId}: status=${status}`);
+      if (lookupErr) {
+        console.error("Failed to lookup users_data by stripe_customer_id:", lookupErr);
+      }
+
+      if (rowsByCustomer && rowsByCustomer.length > 0) {
+        const { error: updateErr } = await supabaseServer
+          .from("users_data")
+          .update(updates)
+          .eq("stripe_customer_id", customerId);
+
+        if (updateErr) console.error("Failed to update subscription status in DB (by customer):", updateErr);
+        else console.log(`Updated subscription for customer ${customerId}: status=${status}`);
+        return;
+      }
+
+      // If no rows found by stripe_customer_id, try to find by customer's email in Stripe (fallback)
+      try {
+        const stripeCustomer = await stripeInstance.customers.retrieve(customerId);
+        const emailFromCustomer = (stripeCustomer as any)?.email;
+        if (emailFromCustomer) {
+          const { data: rowsByEmail, error: byEmailErr } = await supabaseServer
+            .from("users_data")
+            .select("id")
+            .eq("email", emailFromCustomer)
+            .maybeSingle();
+
+          if (byEmailErr) {
+            console.error("Failed to lookup users_data by email fallback:", byEmailErr);
+          } else if (rowsByEmail) {
+            // update by email
+            const { error: updateErr2 } = await supabaseServer
+              .from("users_data")
+              .update(updates)
+              .eq("email", emailFromCustomer);
+
+            if (updateErr2) console.error("Failed to update subscription status in DB (by email):", updateErr2);
+            else console.log(`Updated subscription for email ${emailFromCustomer}: status=${status}`);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn("Could not retrieve stripe customer for email fallback:", e);
+      }
+
+      // Nothing matched — log and continue (admin can reconcile)
+      console.warn(`No users_data row found for stripe customer ${customerId}; no DB update performed.`);
     } catch (e) {
       console.error("handleSubscriptionUpdate error:", e);
     }

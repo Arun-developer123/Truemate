@@ -1,4 +1,3 @@
-// src/app/api/stripe/checkout/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
@@ -15,19 +14,17 @@ export async function POST(req: Request) {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
 
   try {
-    // after: const body = await req.json();
-const body = await req.json();
-console.log("checkout body received:", JSON.stringify(body)); // <-- debug
-const { priceId, email, userId, successUrl, cancelUrl } = body;
-if (!priceId || !email || !userId) {
-  const missing = [];
-  if (!priceId) missing.push("priceId");
-  if (!email) missing.push("email");
-  if (!userId) missing.push("userId");
-  console.warn("Missing params:", missing);
-  return NextResponse.json({ error: "missing params", missing }, { status: 400 });
-}
-
+    const body = await req.json();
+    console.log("checkout body received:", JSON.stringify(body)); // <-- debug
+    const { priceId, email, userId, successUrl, cancelUrl } = body;
+    if (!priceId || !email || !userId) {
+      const missing: string[] = [];
+      if (!priceId) missing.push("priceId");
+      if (!email) missing.push("email");
+      if (!userId) missing.push("userId");
+      console.warn("Missing params:", missing);
+      return NextResponse.json({ error: "missing params", missing }, { status: 400 });
+    }
 
     // fetch user row (by id)
     const { data: userRow, error: fetchErr } = await supabaseServer
