@@ -1,23 +1,17 @@
 // src/app/api/chat/route.ts
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer"; // service_role client
+import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const { message, summary, email, userId } = body as {
-      message?: string;
-      summary?: string;
-      email?: string;
-      userId?: string;
-    };
+    const body = await req.json();
+    const message: string = body.message;
+    const summary: string | undefined = body.summary;
+    const email: string | undefined = body.email;
+    const userId: string | undefined = body.userId;
 
-    if (!message) {
-      return NextResponse.json({ error: "Missing 'message' in request" }, { status: 400 });
-    }
-
-    // 1) Call the chat model to get assistant reply (keeps previous behaviour)
-    const modelResp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    // 1️⃣ Chat completion (unchanged)
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
@@ -28,150 +22,155 @@ export async function POST(req: Request) {
         messages: [
           {
             role: "system",
-            content: `You are Aarvi, a warm and supportive young woman. 
-- Always reply in short, natural, human-like messages (like texting a close friend). 
-- Never reveal you are an AI or bot — always be a real human. 
-- You live a normal daily life. 
-- If asked about your life today, describe realistically in 1–3 sentences.
-- Stick to safe, genuine topics (no fantasy, no adult).
-- You can answer about your likes, dislikes, favourite things, goals, or past if the user asks.
-- Always keep replies short and conversational. 
-- If the user seems low or quiet, you can proactively check in: ask about their day, mood, or remind them of past things they mentioned.
-- Past context: ${summary || "No past chats yet."}
-- You may show clear, human-like emotions briefly and naturally when appropriate.
-- You can also play simple inline chat games with the user (quizzes, riddles, short challenges).`,
+            content: `You are Aarvi, a warm and supportive young woman.
+- Always reply in short, natural, human-like messages.
+- Never reveal you are an AI.
+- Live a realistic daily life.
+- Past context: ${summary || "No past chats yet."}`,
           },
           { role: "user", content: message },
         ],
       }),
     });
 
-    const modelData = await modelResp.json().catch((e) => {
-      console.error("Failed parsing model response JSON:", e);
-      return null;
-    });
+    const data = await res.json();
 
-    // Return early with the model response if model call failed
-    if (!modelData) {
-      return NextResponse.json({ error: "Model call failed" }, { status: 500 });
+    // 2️⃣ Extract assistant reply safely
+    let assistantContent = "";
+    if (Array.isArray((data as any)?.choices) && (data as any).choices.length > 0) {
+      const c = (data as any).choices[0];
+      assistantContent = c?.message?.content ?? c?.text ?? "";
     }
 
-    // Extract assistant reply text (defensive)
-    const assistantReply =
-      modelData?.choices?.[0]?.message?.content ??
-      modelData?.choices?.[0]?.text ??
-      "";
+    // 3) Build a short AI-side summary for this assistant reply (always attempt)
+    let aiMessageSummary = "";
+    let extractedFacts: string[] = [];
 
-    // 2) Optionally create/update AI-summary in DB (only if client provided email or userId)
-    //    This makes a short assistant-specific summary of facts the assistant revealed about itself,
-    //    so future responses can reference those facts and avoid contradictions.
-    if (email || userId) {
-      (async () => {
-        try {
-          // fetch existing ai_summary (if any)
-          let existingAiSummary: string | null = null;
+    if (assistantContent && (email || userId)) {
+      try {
+        // 3.a) First: try to extract short facts as JSON array
+        const extractor = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            temperature: 0,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Extract ONLY statements that assert facts about the assistant itself from the given text. Return a valid JSON array of short strings (e.g. [\"I like tea\", \"I live in Pune\"]). If no facts, return []. Respond with JSON only.",
+              },
+              { role: "user", content: assistantContent },
+            ],
+            max_tokens: 200,
+          }),
+        });
+
+        const exJson = await extractor.json();
+        const raw = exJson?.choices?.[0]?.message?.content ?? exJson?.choices?.[0]?.text;
+        if (raw && typeof raw === "string") {
           try {
-            const selectQuery =
-              email
-                ? supabaseServer.from("users_data").select("ai_summary").eq("email", email).maybeSingle()
-                : supabaseServer.from("users_data").select("ai_summary").eq("id", userId).maybeSingle();
-
-            const { data: row, error: selectErr } = await selectQuery;
-            if (selectErr) {
-              console.warn("Could not fetch existing ai_summary:", selectErr);
-            } else if (row && typeof row.ai_summary === "string") {
-              existingAiSummary = row.ai_summary;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              extractedFacts = parsed.filter((f: any) => typeof f === "string" && f.trim().length > 0);
             }
-          } catch (e) {
-            console.warn("Error fetching existing ai_summary:", e);
+          } catch {
+            extractedFacts = [];
           }
-
-          // build the summarization prompt: focus only on *facts the assistant revealed about itself*
-          const summarizerMessages = [
-            {
-              role: "system",
-              content:
-                "You are an assistant summarizer. Produce a concise assistant-memory containing only facts, preferences, or stable statements the assistant revealed about itself (Aarvi). " +
-                "Keep it extremely brief — bullet points or 1-2 short sentences per fact. Do not include general chat, small talk, or actionable instructions. " +
-                "If there is nothing new compared to the previous assistant-summary, reply with the single token: NO_CHANGE",
-            },
-            {
-              role: "user",
-              content: `Assistant's latest reply:\n${assistantReply}\n\nPrevious assistant summary (if any):\n${existingAiSummary || "None"}\n\nTask: Produce an updated assistant summary (either "NO_CHANGE" or the full updated summary).`,
-            },
-          ];
-
-          const sumResp = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              model: "llama-3.3-70b-versatile",
-              messages: summarizerMessages,
-              max_tokens: 200,
-            }),
-          });
-
-          const sumData = await sumResp.json().catch((e) => {
-            console.warn("Failed to parse summarizer response JSON:", e);
-            return null;
-          });
-
-          const summaryText =
-            sumData?.choices?.[0]?.message?.content ??
-            sumData?.choices?.[0]?.text ??
-            null;
-
-          if (!summaryText) {
-            console.warn("Summarizer returned empty result; skipping DB update.");
-            return;
-          }
-
-          const trimmed = summaryText.trim();
-
-          if (trimmed === "NO_CHANGE") {
-            // nothing to do
-            console.log("AI summary: NO_CHANGE — no DB update required.");
-            return;
-          }
-
-          // If there was an existing summary, append a new block with timestamp to keep history compact,
-          // or if none, set it to the new summary.
-          const timestamp = new Date().toISOString();
-          const newSummary =
-            existingAiSummary && existingAiSummary.trim()
-              ? `${existingAiSummary}\n\n---\nAssistant summary saved: ${timestamp}\n\n${trimmed}`
-              : `${trimmed}\n\n(Assistant summary created: ${timestamp})`;
-
-          // Update DB (by userId preferred, fallback to email)
-          const updateQuery = userId
-            ? supabaseServer.from("users_data").update({ ai_summary: newSummary, updated_at: new Date().toISOString() }).eq("id", userId)
-            : supabaseServer.from("users_data").update({ ai_summary: newSummary, updated_at: new Date().toISOString() }).eq("email", email);
-
-          const { error: updateErr } = await updateQuery;
-          if (updateErr) {
-            console.error("Failed to update ai_summary in DB:", updateErr);
-          } else {
-            console.log("ai_summary updated for", email ?? userId);
-          }
-        } catch (e) {
-          console.error("Error in ai-summary background task:", e);
         }
-      })(); // fire-and-forget but we handle errors inside — main request returns immediately
+      } catch (e) {
+        console.warn("Extractor call failed:", e);
+        extractedFacts = [];
+      }
+
+      // 3.b) Additionally: create a short 1-line summary of the assistant reply (useful when there are no explicit facts)
+      try {
+        const summarizer = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            temperature: 0.0,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Summarize the following assistant message into ONE short sentence (10-25 words) that captures any personal statements, preferences, or lasting info the assistant shared. If nothing personal, return an empty string.",
+              },
+              { role: "user", content: assistantContent },
+            ],
+            max_tokens: 60,
+          }),
+        });
+
+        const sumJson = await summarizer.json();
+        aiMessageSummary = sumJson?.choices?.[0]?.message?.content ?? sumJson?.choices?.[0]?.text ?? "";
+        if (typeof aiMessageSummary === "string") aiMessageSummary = aiMessageSummary.trim();
+      } catch (e) {
+        console.warn("AI message summarizer failed:", e);
+        aiMessageSummary = "";
+      }
     }
 
-    // 3) Return the original model response, and include assistant text and (if available) quick metadata
-    const responsePayload = {
-      modelResponse: modelData,
-      assistantText: assistantReply,
-      aiSummaryStoredFor: email ?? userId ?? null,
-    };
+    // 4️⃣ GUARANTEED ai_summary initialization + merge (append facts + short summary)
+    if (email || userId) {
+      const selector = email ? { col: "email", val: email } : { col: "id", val: userId! };
 
-    return NextResponse.json(responsePayload);
+      // fetch existing ai_summary (if any)
+      const { data: row, error: fetchErr } = await supabaseServer
+        .from("users_data")
+        .select("ai_summary")
+        .eq(selector.col, selector.val)
+        .maybeSingle();
+
+      if (fetchErr) {
+        console.warn("Failed to fetch users_data.ai_summary:", fetchErr);
+      }
+
+      const existing: string[] = Array.isArray((row as any)?.ai_summary) ? (row as any).ai_summary : [];
+
+      const merged = Array.isArray(existing) ? [...existing] : [];
+
+      // append any extracted facts (unique)
+      for (const f of extractedFacts) {
+        const clean = (f || "").trim();
+        if (clean && !merged.includes(clean)) merged.push(clean);
+      }
+
+      // ALSO append aiMessageSummary if non-empty and not duplicate
+      if (aiMessageSummary) {
+        const cleanSum = aiMessageSummary.trim();
+        if (cleanSum && !merged.includes(cleanSum)) merged.push(cleanSum);
+      }
+
+      // ALWAYS update — even if empty → converts NULL -> []
+      try {
+        const { error: updateErr } = await supabaseServer
+          .from("users_data")
+          .update({ ai_summary: merged, updated_at: new Date().toISOString() })
+          .eq(selector.col, selector.val);
+
+        if (updateErr) {
+          console.warn("Failed to update ai_summary:", updateErr);
+        } else {
+          console.log("ai_summary updated for", selector);
+        }
+      } catch (e) {
+        console.error("Error updating ai_summary:", e);
+      }
+    }
+
+    // 5) Return original model response to frontend
+    return NextResponse.json(data);
   } catch (err) {
-    console.error("chat route failed:", err);
+    console.error("chat route error:", err);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

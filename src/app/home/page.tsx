@@ -323,10 +323,15 @@ export default function HomePage(): React.JSX.Element {
       setInput("");
 
       const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: input }),
-      });
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    message: input,
+    email: userEmail,     // <-- add this
+    userId: user?.id,     // <-- and this
+  }),
+});
+
       const data = await res.json();
       const reply = data.choices?.[0]?.message?.content || "⚠️ Empty response";
       const assistantMsg: Message = { role: "assistant", content: reply };
