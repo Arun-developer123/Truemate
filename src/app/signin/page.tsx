@@ -1,4 +1,3 @@
-// src/app/(auth)/signin/page.tsx
 "use client";
 
 import React, { useState } from "react";
@@ -25,6 +24,21 @@ export default function SignInPage() {
     );
   }
 
+  function humanAuthError(err: any) {
+    if (!err) return "Something went wrong. Try again.";
+    const msg = (err.message ?? err.error_description ?? JSON.stringify(err)).toString().toLowerCase();
+    if (msg.includes("invalid login") || msg.includes("invalid_credentials") || msg.includes("incorrect")) {
+      return "Email or password incorrect.";
+    }
+    if (msg.includes("confirm") || msg.includes("not confirmed") || msg.includes("verification")) {
+      return "Please verify your email — check your inbox and spam.";
+    }
+    if (msg.includes("user not found") || msg.includes("no user")) {
+      return "No account found with that email.";
+    }
+    return err.message ?? String(err);
+  }
+
   async function ensureUsersDataById(userId: string | null, emailFallback?: string) {
     if (!userId) return;
     try {
@@ -49,27 +63,24 @@ export default function SignInPage() {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       setLoading(false);
 
-      if (error) throw error;
+      if (error) return alert(humanAuthError(error));
 
-      // Try to extract user id from response shapes
       const userId = extractUserId(data);
 
       if (userId) {
-        // ensure users_data row exists with auth user id
         await ensureUsersDataById(userId, email);
       } else {
-        // fallback: ensure row exists by email (will be reconciled by auth listener later)
+        // fallback: upsert by email
         const { error: upErr } = await supabase
           .from("users_data")
           .upsert([{ email, updated_at: new Date().toISOString() }], { onConflict: "email" });
         if (upErr) console.warn("users_data fallback upsert by email error:", upErr);
       }
 
-      // Redirect to home (protected route should also verify session)
       router.push("/home");
     } catch (err: any) {
       setLoading(false);
-      alert(err?.message || "Sign in failed");
+      alert(humanAuthError(err));
     }
   }
 

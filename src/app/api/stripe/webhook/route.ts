@@ -10,7 +10,10 @@ export async function POST(req: Request) {
   });
   if (!stripePkg) return NextResponse.json({ error: "Stripe not installed" }, { status: 500 });
   const Stripe = stripePkg.default || stripePkg;
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "");
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-06-20",
+});
+
 
   try {
     const buf = await req.arrayBuffer();

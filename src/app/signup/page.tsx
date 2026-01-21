@@ -1,4 +1,3 @@
-// src/app/(auth)/signup/page.tsx
 "use client";
 
 import React, { useState } from "react";
@@ -13,12 +12,24 @@ export default function SignUpPage() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
 
   const isValidEmail = email.includes("@") && email.length > 5;
   const passwordsMatch = password === confirm && password.length >= 6;
   const canSubmit = isValidEmail && passwordsMatch;
 
-  // helper to safely extract user id from different supabase-js shapes
+  function humanAuthError(err: any) {
+    if (!err) return "Something went wrong. Try again.";
+    const msg = (err.message ?? err.error_description ?? JSON.stringify(err)).toString().toLowerCase();
+    if (msg.includes("already registered") || msg.includes("duplicate") || msg.includes("user already")) {
+      return "An account with that email already exists. Try signing in or resend verification.";
+    }
+    if (msg.includes("invalid") || msg.includes("weak")) {
+      return "Please pick a stronger password (6+ chars).";
+    }
+    return err.message ?? String(err);
+  }
+
   function extractUserId(resp: any) {
     return (
       resp?.user?.id ??
@@ -42,13 +53,11 @@ export default function SignUpPage() {
       });
       setLoading(false);
 
-      if (error) throw error;
+      if (error) return alert(humanAuthError(error));
 
-      // Try to get the user id (may be null if email confirm flow requires it)
       const userId = extractUserId(data);
 
       if (userId) {
-        // Ensure users_data row exists with same id (satisfy FK)
         const { error: upErr } = await supabase
           .from("users_data")
           .upsert(
@@ -57,7 +66,6 @@ export default function SignUpPage() {
           );
         if (upErr) console.warn("users_data upsert error:", upErr);
       } else {
-        // Fallback: upsert by email (create placeholder); we'll ensure by id on sign-in or via auth listener
         const { error: upErr } = await supabase
           .from("users_data")
           .upsert(
@@ -71,7 +79,25 @@ export default function SignUpPage() {
       router.push("/signin");
     } catch (err: any) {
       setLoading(false);
-      alert(err?.message || "Sign up failed");
+      alert(humanAuthError(err));
+    }
+  }
+
+  async function resendVerification() {
+    if (!email || !isValidEmail) return alert("Enter the email you used to sign up.");
+    try {
+      setResendLoading(true);
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: { emailRedirectTo: `${location.origin}/auth/callback` },
+      });
+      setResendLoading(false);
+      if (error) return alert(humanAuthError(error));
+      alert("Verification email resent — check your inbox and spam.");
+    } catch (err: any) {
+      setResendLoading(false);
+      alert(humanAuthError(err));
     }
   }
 
@@ -123,6 +149,17 @@ export default function SignUpPage() {
         >
           {loading ? "Creating account..." : "Sign Up"}
         </button>
+
+        <div className="text-center">
+          <button
+            type="button"
+            onClick={resendVerification}
+            disabled={resendLoading}
+            className="text-sm text-blue-600 underline mt-2"
+          >
+            {resendLoading ? "Resending..." : "Didn't receive email? Resend verification"}
+          </button>
+        </div>
 
         <div className="text-center text-sm">
           Already have an account?{" "}
