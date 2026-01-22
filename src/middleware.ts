@@ -4,30 +4,18 @@ import type { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(req: NextRequest) {
-  let res = NextResponse.next({
-    request: {
-      headers: req.headers,
-    },
-  });
+  const res = NextResponse.next();
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        get(name: string) {
-          return req.cookies.get(name)?.value;
-        },
-        set(name: string, value: string, options: any) {
-          res = NextResponse.next({
-            request: { headers: req.headers },
-          });
+        get: (name) => req.cookies.get(name)?.value,
+        set: (name, value, options) => {
           res.cookies.set({ name, value, ...options });
         },
-        remove(name: string, options: any) {
-          res = NextResponse.next({
-            request: { headers: req.headers },
-          });
+        remove: (name, options) => {
           res.cookies.set({ name, value: "", ...options });
         },
       },
@@ -42,12 +30,16 @@ export async function middleware(req: NextRequest) {
 
   // 🔒 protect home
   if (!session && pathname.startsWith("/home")) {
-    return NextResponse.redirect(new URL("/signin", req.url));
+    const url = req.nextUrl.clone();
+    url.pathname = "/signin";
+    return NextResponse.redirect(url);
   }
 
   // 🔁 logged-in user should not access auth pages
   if (session && (pathname === "/signin" || pathname === "/signup")) {
-    return NextResponse.redirect(new URL("/home", req.url));
+    const url = req.nextUrl.clone();
+    url.pathname = "/home";
+    return NextResponse.redirect(url);
   }
 
   return res;

@@ -21,23 +21,35 @@ export default function FreeChatsManager({
   const [showModal, setShowModal] = useState(false);
 
   // 🔹 Fetch remaining (READ ONLY)
-  useEffect(() => {
-    if (!userId) return;
+ useEffect(() => {
+  if (!userId) return;
 
-    fetch("/api/user/use-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, peek: true }),
+  const controller = new AbortController();
+
+  fetch("/api/user/use-chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, peek: true }),
+    signal: controller.signal,
+  })
+    .then((r) => {
+      if (!r.ok) throw new Error("API error");
+      return r.json();
     })
-      .then((r) => r.json())
-      .then((d) => {
-        if (d.remaining !== undefined) {
-          setRemaining(d.remaining);
-          if (d.remaining <= 5) setShowModal(true);
-        }
-      })
-      .catch(() => setRemaining(30));
-  }, [messages.length, userId]);
+    .then((d) => {
+      if (typeof d.remaining === "number") {
+        setRemaining(d.remaining);
+        if (d.remaining <= 5) setShowModal(true);
+      }
+    })
+    .catch(() => {
+      setRemaining(30); // safe fallback
+    });
+
+  return () => controller.abort();
+}, [userId]);
+
+
 
   return (
     <div className="w-full">
@@ -67,13 +79,13 @@ export default function FreeChatsManager({
                 priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_MONTHLY!}
                 email={userEmail || ""}
                 userId={userId || ""}
-                label="₹15 / month"
+                label="$15 / month"
               />
               <SubscribeButton
                 priceId={process.env.NEXT_PUBLIC_STRIPE_PRICE_YEARLY!}
                 email={userEmail || ""}
                 userId={userId || ""}
-                label="₹140 / year"
+                label="$140 / year"
               />
             </div>
           </div>

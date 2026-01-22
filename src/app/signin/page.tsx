@@ -77,7 +77,9 @@ export default function SignInPage() {
         if (upErr) console.warn("users_data fallback upsert by email error:", upErr);
       }
 
+      router.refresh();
       router.push("/home");
+
     } catch (err: any) {
       setLoading(false);
       alert(humanAuthError(err));

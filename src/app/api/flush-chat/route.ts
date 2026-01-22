@@ -1,5 +1,6 @@
 // src/app/api/flush-chat/route.ts
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { supabaseServer } from "@/lib/supabaseServer"; // service_role client
 
