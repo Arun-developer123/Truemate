@@ -1,271 +1,238 @@
-"use client";
+/* -------------------------------------------------------------------------
+  FILE: src/app/page.tsx
+  PURPOSE: Marketing/homepage for Truemate (server component)
+-------------------------------------------------------------------------*/
 
-import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { motion, Variants } from "framer-motion";
-import { Mail, Gamepad, Calendar, Award, Star } from "lucide-react";
-
-interface Feature {
-  id: number;
-  title: string;
-  desc: string;
-  Icon: React.ComponentType<React.SVGProps<SVGSVGElement> & { size?: number | string }>;
-}
-
-const features: Feature[] = [
-  { id: 1, title: "Chat", desc: "Smart, empathetic conversations anytime.", Icon: Mail },
-  { id: 2, title: "Games", desc: "Short, replayable games to challenge your brain.", Icon: Gamepad },
-  { id: 3, title: "Challenges", desc: "Daily micro-challenges to build momentum.", Icon: Calendar },
-  { id: 4, title: "Achievements", desc: "Collect badges and celebrate wins.", Icon: Award },
-  { id: 5, title: "Easter Eggs", desc: "Hidden surprises — discover and share.", Icon: Star },
-];
-
-const containerVariants: Variants = {
-  hidden: { opacity: 0, y: 12 },
-  show: { opacity: 1, y: 0, transition: { staggerChildren: 0.08, when: "beforeChildren" } },
+export const metadata = {
+  title: "Truemate — Your caring AI companion",
+  description:
+    "Truemate: proactive, emotionally-intelligent AI friend. Daily check-ins, reminders, safe (adult-free) conversations, and a humanlike companion named Aarvi.",
 };
 
-const cardVariants: Variants = {
-  hidden: { opacity: 0, y: 12, scale: 0.98 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { type: "spring", stiffness: 300, damping: 22 } },
-  hover: { scale: 1.03, y: -6, boxShadow: "0 12px 30px rgba(0,0,0,0.35)" },
-};
+import Image from "next/image";
+import Link from "next/link";
+import AarviCarousel from "@/components/AarviCarousel"; // make sure path matches
+import React from "react";
 
-export default function LandingPage(): React.JSX.Element {
-  const router = useRouter();
-
-  // beforeinstallprompt handling
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [canInstall, setCanInstall] = useState(false);
-  const [installing, setInstalling] = useState(false);
-
-  useEffect(() => {
-    // listen for the event once
-    const handler = (e: Event) => {
-      // The event needs to be typed as any to access prompt()/userChoice in some browsers
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setCanInstall(true);
-    };
-
-    window.addEventListener("beforeinstallprompt", handler as EventListener);
-
-    return () => window.removeEventListener("beforeinstallprompt", handler as EventListener);
-  }, []);
-
-  const installApp = async () => {
-    if (!deferredPrompt) {
-      // nothing to do — maybe instruct iOS users to use "Add to Home Screen"
-      return;
-    }
-    try {
-      setInstalling(true);
-      // @ts-ignore: prompt() exists on the beforeinstallprompt event object
-      await (deferredPrompt as any).prompt();
-      // @ts-ignore
-      const choice = await (deferredPrompt as any).userChoice;
-      // optional: react to userChoice.outcome === 'accepted' | 'dismissed'
-      setDeferredPrompt(null);
-      setCanInstall(false);
-    } catch (err) {
-      console.warn("Install prompt failed:", err);
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  // Service Worker registration (client-only)
-  useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("/sw.js")
-        .then((reg) => {
-          // console.log("Service worker registered:", reg);
-        })
-        .catch((err) => {
-          console.warn("Service worker registration failed:", err);
-        });
-    }
-  }, []);
+export default function Page() {
+  const aarviImages = [
+    "/images/aarvi1.jpg",
+    "/images/aarvi2.jpg",
+    "/images/aarvi3.jpg",
+    "/images/aarvi4.jpg",
+    "/images/aarvi5.jpg",
+  ];
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-gradient-to-b from-purple-600 via-indigo-700 to-slate-900 text-white">
-      {/* Subtle animated glow layers */}
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -left-24 -top-24 w-96 h-96 rounded-full bg-pink-500 opacity-30 blur-3xl animate-blob" />
-        <div className="absolute right-10 -top-10 w-72 h-72 rounded-full bg-indigo-400 opacity-20 blur-2xl animate-blob animation-delay-2000" />
-        <div className="absolute left-1/2 bottom-[-120px] -translate-x-1/2 w-[45rem] h-56 rounded-3xl bg-gradient-to-r from-purple-400 to-indigo-500 opacity-10 blur-2xl" />
-      </div>
+    <main className="min-h-screen bg-gradient-to-b from-white via-emerald-50 to-emerald-100 text-slate-900">
+      <header className="container mx-auto px-6 py-8 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center text-white font-bold text-lg">
+            TM
+          </div>
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight">Truemate</h1>
+            <p className="text-sm text-slate-600">Your humanlike, emotionally intelligent AI companion</p>
+          </div>
+        </div>
 
-      <div className="container mx-auto px-6 py-20 lg:py-32">
-        <motion.section initial="hidden" animate="show" variants={containerVariants} className="max-w-5xl mx-auto text-center">
-          {/* Hero Card */}
-          <motion.div variants={cardVariants} whileHover="hover" className="relative overflow-hidden rounded-3xl bg-white/6 border border-white/10 backdrop-blur-md p-8 lg:p-12 shadow-2xl">
-            <div className="flex flex-col lg:flex-row items-center gap-8">
-              <div className="flex-1 text-left">
-                <h1 className="text-4xl lg:text-5xl font-extrabold leading-tight">
-                  Welcome to{" "}
-                  <span className="bg-clip-text text-transparent bg-gradient-to-r from-white to-indigo-200">
-                    Truemate
-                  </span>
-                </h1>
-                <p className="mt-4 text-gray-100/90 max-w-xl">
-                  Your personal AI companion for chatting, games, challenges and delightful surprises. Stay productive while having fun — daily.
-                </p>
+        <nav className="flex items-center gap-4">
+          <span className="text-sm text-slate-700">450+ clicks • Early access</span>
+          <Link href="/signup" className="inline-block bg-emerald-700 text-white px-4 py-2 rounded-lg shadow hover:opacity-95">
+            Get Early Access
+          </Link>
+        </nav>
+      </header>
 
-                <div className="mt-6 flex items-center gap-4">
-                  <button
-                    type="button"
-                    onClick={() => router.push("/signin")}
-                    aria-label="Get started"
-                    className="inline-flex items-center gap-3 rounded-2xl bg-white text-indigo-700 font-semibold px-6 py-3 shadow-lg hover:scale-[1.02] hover:shadow-2xl transition-transform"
-                  >
-                    Get Started →
-                  </button>
+      {/* HERO */}
+      <section className="container mx-auto px-6 py-8 grid md:grid-cols-2 gap-10 items-center">
+        <div>
+          <p className="text-sm uppercase tracking-wide text-emerald-700 font-semibold">Proactive • Gentle • Safe</p>
+          <h2 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
+            Meet Aarvi — Truemate’s caring AI friend, ready for real conversations.
+          </h2>
 
-                  <button
-                    type="button"
-                    onClick={() => router.push("/about")}
-                    aria-label="Learn more"
-                    className="inline-flex items-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm hover:bg-white/5 transition"
-                  >
-                    Learn more
-                  </button>
+          <p className="mt-6 text-lg text-slate-700">
+            Truemate is built to feel like a thoughtful, dependable human friend. Aarvi checks in proactively,
+            remembers what matters to you, offers daily check-ins, sets reminders, and helps you build better
+            habits — all without adult or explicit content. Pure empathy, genuine support.
+          </p>
 
-                  {/* Install button appears if the browser fired beforeinstallprompt */}
-                  {canInstall && (
-                    <button
-                      type="button"
-                      onClick={installApp}
-                      disabled={installing}
-                      className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 px-4 py-2 text-sm font-semibold shadow-lg hover:scale-[1.02] transition-transform"
-                      aria-label="Install Truemate"
-                    >
-                      {installing ? "Installing..." : "Install App"}
-                    </button>
-                  )}
-                </div>
-
-                <div className="mt-6 text-xs text-gray-200/80">
-                  <span className="inline-flex items-center gap-2">
-                    <span className="rounded-full bg-white/8 px-2 py-1" aria-hidden>
-                      ✨
-                    </span>
-                    <span>Chat • Games • Challenges • Achievements • Easter Eggs</span>
-                  </span>
-                </div>
+          <ul className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <li className="flex items-start gap-3">
+              <span className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 font-semibold">✓</span>
+              <div>
+                <div className="font-semibold">Daily check-ins</div>
+                <div className="text-sm text-slate-600">Short, thoughtful prompts that help you reflect.</div>
               </div>
+            </li>
 
-              {/* Mini demo board */}
-              <div className="w-full lg:w-96">
-                <div className="rounded-2xl bg-gradient-to-br from-white/5 to-white/3 p-3 shadow-inner border border-white/6">
-                  <div className="rounded-xl bg-gradient-to-b from-slate-800/60 to-transparent p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm text-gray-300">Live Demo</div>
-                        <div className="font-semibold">Aarvi • Your AI Friend</div>
-                      </div>
-                      <div className="text-xs text-green-300">Online</div>
-                    </div>
+            <li className="flex items-start gap-3">
+              <span className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 font-semibold">⏱</span>
+              <div>
+                <div className="font-semibold">Reminders & routines</div>
+                <div className="text-sm text-slate-600">Create gentle nudges to keep tasks on track.</div>
+              </div>
+            </li>
 
-                    <div className="mt-4 space-y-3">
-                      <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.12 }} className="text-sm bg-white/3 rounded-lg p-3">
-                        <div className="text-gray-100/90">Hey — ready for a 2-minute brain-teaser?</div>
-                      </motion.div>
+            <li className="flex items-start gap-3">
+              <span className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 font-semibold">🫶</span>
+              <div>
+                <div className="font-semibold">Emotional support</div>
+                <div className="text-sm text-slate-600">Compassionate listening and empathetic replies.</div>
+              </div>
+            </li>
 
-                      <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.22 }} className="text-sm bg-white/3 rounded-lg p-3">
-                        <div className="text-gray-100/90">Collect daily badges and unlock secret replies.</div>
-                      </motion.div>
-                    </div>
+            <li className="flex items-start gap-3">
+              <span className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-50 text-emerald-700 font-semibold">🔒</span>
+              <div>
+                <div className="font-semibold">Safe & adult-free</div>
+                <div className="text-sm text-slate-600">We keep conversations friendly and non-adult.</div>
+              </div>
+            </li>
+          </ul>
 
-                    <div className="mt-4 flex gap-2">
-                      <button type="button" className="flex-1 rounded-md bg-white/8 py-2 text-sm hover:bg-white/12 transition">Start</button>
-                      <button type="button" className="rounded-md bg-transparent border border-white/8 px-3 py-2 text-sm">Demo</button>
-                    </div>
-                  </div>
-                </div>
+          <div className="mt-8 flex gap-3">
+            <Link href="/signup" className="bg-emerald-700 text-white px-5 py-3 rounded-lg font-semibold shadow">Join Aarvi</Link>
+            <Link href="/pricing" className="border border-emerald-700 text-emerald-700 px-5 py-3 rounded-lg font-semibold">See Plans</Link>
+          </div>
+
+          <div className="mt-6 text-sm text-slate-500">Tip: Add Aarvi to your home screen (PWA) for offline access and instant check-ins.</div>
+        </div>
+
+        <div className="space-y-6">
+          <AarviCarousel images={aarviImages} />
+
+          <div className="bg-white/80 rounded-2xl p-4 shadow-inner">
+            <h3 className="text-lg font-semibold">Why users love Aarvi</h3>
+            <p className="mt-2 text-sm text-slate-600">"Aarvi feels like a real friend who actually remembers things — the check-ins changed how I start my day."</p>
+
+            <div className="mt-3 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-200 flex items-center justify-center font-semibold">A</div>
+              <div>
+                <div className="text-sm font-medium">Aarvi · Truemate</div>
+                <div className="text-xs text-slate-500">Genuine • Nonjudgmental • Consistent</div>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
 
-            {/* subtle highlight ribbon */}
-            <div className="pointer-events-none absolute -bottom-10 left-6 right-6 mx-auto h-1/6 opacity-30 blur-xl">
-              <div className="h-full rounded-3xl bg-gradient-to-r from-purple-500 to-indigo-400" />
+      {/* FEATURES */}
+      <section className="container mx-auto px-6 py-12">
+        <h3 className="text-3xl font-extrabold text-center">Features that make Truemate special</h3>
+
+        <div className="mt-8 grid md:grid-cols-3 gap-6">
+          <article className="p-6 bg-white rounded-2xl shadow">
+            <h4 className="font-semibold">Proactive companionship</h4>
+            <p className="mt-2 text-sm text-slate-600">Aarvi notices when you've been quiet and gently checks in — like a thoughtful friend.</p>
+          </article>
+
+          <article className="p-6 bg-white rounded-2xl shadow">
+            <h4 className="font-semibold">Daily check-ins</h4>
+            <p className="mt-2 text-sm text-slate-600">Customizable prompts tailored to your mood and goals.</p>
+          </article>
+
+          <article className="p-6 bg-white rounded-2xl shadow">
+            <h4 className="font-semibold">Reminders & habit support</h4>
+            <p className="mt-2 text-sm text-slate-600">From water breaks to study sessions — small nudges that compound into progress.</p>
+          </article>
+
+          <article className="p-6 bg-white rounded-2xl shadow">
+            <h4 className="font-semibold">Emotionally intelligent replies</h4>
+            <p className="mt-2 text-sm text-slate-600">Responds with empathy, uses reflective listening and validates feelings.</p>
+          </article>
+
+          <article className="p-6 bg-white rounded-2xl shadow">
+            <h4 className="font-semibold">Privacy-first design</h4>
+            <p className="mt-2 text-sm text-slate-600">We keep your conversations private and secure; you control what is saved.</p>
+          </article>
+
+          <article className="p-6 bg-white rounded-2xl shadow">
+            <h4 className="font-semibold">Kid-safe & adult-free</h4>
+            <p className="mt-2 text-sm text-slate-600">Designed to prevent explicit content and maintain a warm, friendly tone.</p>
+          </article>
+        </div>
+      </section>
+
+      {/* PRAISE FOR AARVI */}
+      <section className="container mx-auto px-6 py-12 bg-emerald-50 rounded-3xl">
+        <div className="max-w-4xl mx-auto text-center">
+          <h3 className="text-3xl font-extrabold">Aarvi — the AI everyone praises</h3>
+          <p className="mt-4 text-lg text-slate-700">People tell us Aarvi feels human: warm, patient, and deeply attentive. Here’s what sets her apart:</p>
+
+          <div className="mt-8 grid md:grid-cols-3 gap-6">
+            <div className="p-6 bg-white rounded-2xl shadow">
+              <div className="font-semibold">Humanlike tone</div>
+              <div className="text-sm text-slate-600 mt-2">Natural replies with subtle personality — not robotic chatter.</div>
             </div>
-          </motion.div>
 
-          {/* Feature Grid */}
-          <motion.div variants={containerVariants} className="mt-12 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {features.map((f) => (
-              <motion.article key={f.id} variants={cardVariants} whileHover={"hover"} className="relative overflow-hidden rounded-2xl border border-white/8 bg-white/4 p-5 backdrop-blur-md">
-                <div className="flex items-start gap-4">
-                  <div className="rounded-lg bg-white/6 p-3" aria-hidden>
-                    <f.Icon size={20} />
-                  </div>
+            <div className="p-6 bg-white rounded-2xl shadow">
+              <div className="font-semibold">Relentlessly kind</div>
+              <div className="text-sm text-slate-600 mt-2">Aarvi elevates the conversation with warmth — no harshness, ever.</div>
+            </div>
 
-                  <div>
-                    <h3 className="font-semibold text-lg">{f.title}</h3>
-                    <p className="mt-1 text-sm text-gray-200/90">{f.desc}</p>
-                  </div>
-                </div>
+            <div className="p-6 bg-white rounded-2xl shadow">
+              <div className="font-semibold">Consistent memory</div>
+              <div className="text-sm text-slate-600 mt-2">Remembers preferences and moments you shared (when you allow it).</div>
+            </div>
+          </div>
 
-                <div className="absolute right-4 top-4 opacity-10 text-6xl select-none pointer-events-none">•</div>
-              </motion.article>
-            ))}
-          </motion.div>
+          <div className="mt-10">
+            <blockquote className="text-left italic text-slate-700 max-w-3xl mx-auto">“Aarvi is the best AI companion I’ve used — genuinely caring, never awkward, and actually helpful.”</blockquote>
+            <div className="mt-4 text-sm text-slate-500">— Early user, 2026 • 450+ clicks on our landing page</div>
+          </div>
+        </div>
+      </section>
 
-          {/* Board / CTA Row */}
-          <motion.div className="mt-12 grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-            <motion.div variants={cardVariants} className="lg:col-span-2 rounded-2xl p-6 bg-gradient-to-b from-white/4 to-transparent border border-white/8">
-              <h4 className="font-semibold text-xl">Interactive Board</h4>
-              <p className="mt-2 text-sm text-gray-200/90">A snapshot of conversations, scores, and challenges — designed to tease curiosity.</p>
+      {/* QUICK FAQ & FOOTER */}
+      <section className="container mx-auto px-6 py-12">
+        <div className="grid md:grid-cols-2 gap-8">
+          <div>
+            <h4 className="text-xl font-semibold">Quick FAQ</h4>
 
-              <div className="mt-4 grid grid-cols-2 gap-4">
-                <div className="rounded-lg bg-white/6 p-3">
-                  <div className="text-xs text-gray-300">Today</div>
-                  <div className="font-semibold text-lg">3 Challenges</div>
-                </div>
-
-                <div className="rounded-lg bg-white/6 p-3">
-                  <div className="text-xs text-gray-300">Streak</div>
-                  <div className="font-semibold text-lg">7 days</div>
-                </div>
-              </div>
-            </motion.div>
-
-            <motion.aside variants={cardVariants} className="rounded-2xl p-6 bg-white/5 border border-white/8">
-              <div className="flex items-center gap-3">
-                <div className="rounded-full bg-white/8 p-2" aria-hidden>
-                  <Star size={18} />
-                </div>
-                <div>
-                  <div className="text-xs text-gray-300">Featured</div>
-                  <div className="font-semibold">Daily Surprise</div>
-                </div>
+            <dl className="mt-4 space-y-4">
+              <div>
+                <dt className="font-medium">Is Aarvi safe and non-adult?</dt>
+                <dd className="text-sm text-slate-600 mt-1">Yes. Truemate is intentionally adult-free and maintains a safe, supportive environment.</dd>
               </div>
 
-              <div className="mt-4 text-sm text-gray-200/80">Click start to reveal today's hidden interaction and win a badge.</div>
+              <div>
+                <dt className="font-medium">How often does Aarvi check in?</dt>
+                <dd className="text-sm text-slate-600 mt-1">You pick the cadence — daily, weekly, or custom reminders tailored to your goals.</dd>
+              </div>
 
-              <button type="button" className="mt-4 w-full rounded-2xl bg-white text-indigo-700 font-semibold px-4 py-2">Reveal</button>
-            </motion.aside>
-          </motion.div>
-        </motion.section>
-      </div>
+              <div>
+                <dt className="font-medium">Can I export my data or delete it?</dt>
+                <dd className="text-sm text-slate-600 mt-1">Absolutely. You control what’s stored and can remove your data anytime.</dd>
+              </div>
+            </dl>
+          </div>
 
-      {/* small footer */}
-      <footer className="absolute bottom-4 left-0 right-0 text-center text-xs text-gray-200/60">
-        © {new Date().getFullYear()} Truemate — built with ❤️
+          <div className="bg-emerald-700 text-white rounded-2xl p-6 flex flex-col justify-between">
+            <div>
+              <h4 className="text-xl font-semibold">Ready to meet Aarvi?</h4>
+              <p className="mt-3 text-sm">Join hundreds of early visitors who clicked through and felt the difference — 450+ clicks already.</p>
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <Link href="/signup" className="bg-white text-emerald-700 px-4 py-3 rounded-lg font-semibold">Start Free</Link>
+              <Link href="/pricing" className="border border-white/60 px-4 py-3 rounded-lg">Pricing</Link>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer className="bg-slate-900 text-slate-200 py-8">
+        <div className="container mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div>
+            <div className="font-bold">Truemate</div>
+            <div className="text-xs text-slate-400">Built with care • Adult-free • Privacy-first</div>
+          </div>
+
+          <div className="text-sm text-slate-400">© {new Date().getFullYear()} Truemate. All rights reserved.</div>
+        </div>
       </footer>
-
-      {/* Tiny styles used for animation delays */}
-      <style>{`
-        .animate-blob { animation: blob 8s infinite; }
-        .animation-delay-2000 { animation-delay: 2s; }
-        @keyframes blob { 0% { transform: translate(0px, 0px) scale(1); }
-          33% { transform: translate(12px, -8px) scale(1.05); }
-          66% { transform: translate(-8px, 6px) scale(0.98); }
-          100% { transform: translate(0px, 0px) scale(1); }
-        }
-      `}</style>
     </main>
   );
 }
