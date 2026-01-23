@@ -158,10 +158,10 @@ export async function POST(req: Request) {
         subscription_current_period_end: current_period_end,
       };
 
-      if (status === "active") {
+       // Treat 'active' and 'trialing' as unlimited
+      if (status === "active" || status === "trialing") {
         updates.free_chats_remaining = null; // unlimited
       } else if (status === "canceled" || status === "incomplete_expired" || status === "past_due") {
-        // restore to 30 if not set
         updates.free_chats_remaining = 30;
       }
 

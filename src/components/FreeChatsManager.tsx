@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
 import SubscribeButton from "@/components/SubscribeButton";
 
 type Role = "user" | "assistant" | "system";
@@ -17,61 +16,97 @@ export default function FreeChatsManager({
   userId?: string | null;
   messages: Message[];
 }) {
-  const [remaining, setRemaining] = useState<number | null>(null);
+  /**
+   * remaining meanings:
+   * null  -> unlimited (subscribed)
+   * number -> free chats remaining
+   * undefined -> still loading
+   */
+  const [remaining, setRemaining] = useState<number | null | undefined>(undefined);
   const [showModal, setShowModal] = useState(false);
 
-  // 🔹 Fetch remaining (READ ONLY)
- useEffect(() => {
-  if (!userId) return;
+  // 🔹 Fetch remaining chats (READ ONLY)
+  useEffect(() => {
+    if (!userId) return;
 
-  const controller = new AbortController();
+    const controller = new AbortController();
 
-  fetch("/api/user/use-chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, peek: true }),
-    signal: controller.signal,
-  })
-    .then((r) => {
-      if (!r.ok) throw new Error("API error");
-      return r.json();
+    fetch("/api/user/use-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, peek: true }),
+      signal: controller.signal,
     })
-    .then((d) => {
-      if (typeof d.remaining === "number") {
-        setRemaining(d.remaining);
-        if (d.remaining <= 5) setShowModal(true);
-      }
-    })
-    .catch(() => {
-      setRemaining(30); // safe fallback
-    });
+      .then((r) => {
+        if (!r.ok) throw new Error("API error");
+        return r.json();
+      })
+      .then((d) => {
+        // 🟢 Subscribed user → unlimited
+        if (d.remaining === null) {
+          setRemaining(null);
+          return;
+        }
 
-  return () => controller.abort();
-}, [userId]);
+        // 🟢 Free user
+        if (typeof d.remaining === "number") {
+          setRemaining(d.remaining);
 
+          // show warning modal only for free users
+          if (d.remaining <= 5) {
+            setShowModal(true);
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("use-chat peek failed:", err);
+        setRemaining(undefined);
+      });
 
+    return () => controller.abort();
+  }, [userId]);
+
+  // 🔹 Text to show in header
+  const remainingText =
+    remaining === undefined
+      ? "Loading..."
+      : remaining === null
+      ? "Unlimited chats (Subscribed)"
+      : `${remaining} free chats remaining`;
 
   return (
     <div className="w-full">
       <div className="flex items-center gap-3">
         <div className="text-sm text-white/90">
-          {remaining === null ? "Loading..." : `${remaining} free chats remaining`}
+          {remainingText}
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="text-xs px-2 py-1 rounded bg-white/90 text-gray-800 font-medium"
-        >
-          Upgrade
-        </button>
+
+        {/* Upgrade button hidden for subscribed users */}
+        {remaining !== null && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="text-xs px-2 py-1 rounded bg-white/90 text-gray-800 font-medium"
+          >
+            Upgrade
+          </button>
+        )}
       </div>
 
-      {showModal && (
+      {/* 🔹 Upgrade Modal (FREE USERS ONLY) */}
+      {showModal && remaining !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowModal(false)} />
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setShowModal(false)}
+          />
+
           <div className="bg-white rounded-xl p-6 z-10 max-w-md w-full">
-            <h3 className="text-lg font-semibold mb-2">Upgrade to continue</h3>
+            <h3 className="text-lg font-semibold mb-2">
+              Upgrade to continue
+            </h3>
+
             <p className="text-sm mb-4">
-              You have {remaining} free chats left.
+              You have <b>{remaining}</b> free chats left.
             </p>
 
             <div className="grid grid-cols-2 gap-4">
