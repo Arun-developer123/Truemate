@@ -190,12 +190,16 @@ export default function HomePage(): React.JSX.Element {
           if (selectedBackgroundFilename && selectedBackgroundFilename !== "aarvi.jpg") {
             const matched = fixed.find((f) => f.name === selectedBackgroundFilename);
             if (matched) {
-              // if unlocked and signedUrl present, apply it now
-              if (matched.isUnlocked && matched.signedUrl) {
-                setSelectedBackground(matched.signedUrl);
+              // *** CHANGE: if unlocked but no signedUrl returned by list, use the thumb endpoint ***
+              if (matched.isUnlocked) {
+                if (matched.signedUrl) {
+                  setSelectedBackground(matched.signedUrl);
+                } else {
+                  // use thumb endpoint which will redirect to signed url
+                  setSelectedBackground(`/api/backgrounds/thumb?file=${encodeURIComponent(matched.name)}`);
+                }
               } else {
-                // otherwise keep fallback (aarvi.jpg) until user unlocks
-                // no-op
+                // keep fallback (aarvi.jpg) until user unlocks
               }
             }
           }
@@ -600,9 +604,9 @@ export default function HomePage(): React.JSX.Element {
 
   const isSelected = (it: BackgroundItem) => {
     try {
-      // match by signedUrl (preferred) or by filename fallback
+      // match by signedUrl (preferred) or by filename/thumb endpoint fallback
       if (it.signedUrl && selectedBackground === it.signedUrl) return true;
-      if (selectedBackground && selectedBackground.endsWith(it.name)) return true;
+      if (selectedBackground && selectedBackground.includes(it.name)) return true; // covers thumb endpoint or direct signed urls
       // also consider public default
       if (it.name === "aarvi.jpg" && selectedBackground === "/aarvi.jpg") return true;
       return false;
@@ -649,9 +653,10 @@ export default function HomePage(): React.JSX.Element {
   };
 
   // --- Gallery select (keeps existing saveBackgroundPreference behavior) ---
+  // NOTE: We pass `signedUrl` as either real signed URL or the thumb endpoint for unlocked private files.
   const selectBackground = (filename: string, signedUrl?: string | null) => {
     if (signedUrl) {
-      // unlocked paid image => use signed URL directly (secure)
+      // unlocked paid image => use signed URL or thumb endpoint directly (secure)
       setSelectedBackground(signedUrl);
     } else {
       // no signedUrl provided — only safe direct file we allow is the public default
@@ -929,66 +934,70 @@ export default function HomePage(): React.JSX.Element {
 
             <div className="grid grid-cols-2 gap-4">
               {backgrounds.length > 0 ? (
-                backgrounds.map((it) => (
-                  <div key={it.name} className="relative">
-                    <button
-                      // Prevent context menu (right-click) for locked items so user can't "Open image in new tab"
-                      onContextMenu={(e) => {
-                        if (!it.isUnlocked) {
-                          e.preventDefault();
-                          e.stopPropagation();
-                        }
-                      }}
-                      onClick={() => {
-                        if (it.isUnlocked) {
-                          selectBackground(it.name, it.signedUrl || null);
-                        } else {
-                          startCheckout(it.name);
-                        }
-                      }}
-                      className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 w-full text-left ${isSelected(it) ? "border-indigo-500" : "border-transparent"}`}
-                    >
-                      {/* Image: blur when locked. Also disable drag to make it harder to open/save */}
-                      <img
-                        src={it.thumbUrl}
-                        alt={it.name}
-                        draggable={false}
-                        onDragStart={(e) => e.preventDefault()}
-                        className={`w-full h-40 object-cover block transition-transform duration-300 ${it.isUnlocked ? "" : "filter blur-sm scale-105"}`}
-                      />
+                backgrounds.map((it) => {
+                  // *** compute a usable "signedUrl" for click: either real signedUrl or thumb endpoint when unlocked ***
+                  const unlockedUrl = it.signedUrl ?? (it.isUnlocked ? `/api/backgrounds/thumb?file=${encodeURIComponent(it.name)}` : null);
+                  return (
+                    <div key={it.name} className="relative">
+                      <button
+                        // Prevent context menu (right-click) for locked items so user can't "Open image in new tab"
+                        onContextMenu={(e) => {
+                          if (!it.isUnlocked) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                          }
+                        }}
+                        onClick={() => {
+                          if (it.isUnlocked) {
+                            selectBackground(it.name, unlockedUrl);
+                          } else {
+                            startCheckout(it.name);
+                          }
+                        }}
+                        className={`rounded-xl overflow-hidden shadow-lg p-0 border-2 w-full text-left ${isSelected(it) ? "border-indigo-500" : "border-transparent"}`}
+                      >
+                        {/* Image: blur when locked. Also disable drag to make it harder to open/save */}
+                        <img
+                          src={it.thumbUrl}
+                          alt={it.name}
+                          draggable={false}
+                          onDragStart={(e) => e.preventDefault()}
+                          className={`w-full h-40 object-cover block transition-transform duration-300 ${it.isUnlocked ? "" : "filter blur-sm scale-105"}`}
+                        />
 
-                      {/* Text row */}
-                      <div className="p-2 text-sm text-center flex items-center justify-between">
-                        <span className="truncate w-3/4">{it.name.replace(/[-.]/g, " ")}</span>
-                        <span className="text-xs w-1/4 text-right">{it.isUnlocked ? "Unlocked" : "Locked"}</span>
-                      </div>
-                    </button>
-
-                    {/* Lock overlay & icon for locked items */}
-                    {!it.isUnlocked && (
-                      <>
-                        {/* subtle dark overlay so the blurred image reads as locked */}
-                        <div className="absolute inset-0 pointer-events-none rounded-xl overflow-hidden">
-                          <div className="absolute inset-0 bg-black/25 rounded-xl" />
+                        {/* Text row */}
+                        <div className="p-2 text-sm text-center flex items-center justify-between">
+                          <span className="truncate w-3/4">{it.name.replace(/[-.]/g, " ")}</span>
+                          <span className="text-xs w-1/4 text-right">{it.isUnlocked ? "Unlocked" : "Locked"}</span>
                         </div>
+                      </button>
 
-                        {/* centered lock icon */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <div className="bg-white/90 rounded-full p-2 shadow-lg">
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-gray-800" viewBox="0 0 24 24" fill="none">
-                              <path d="M12 17a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="currentColor" />
-                              <path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                              <rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                            </svg>
+                      {/* Lock overlay & icon for locked items */}
+                      {!it.isUnlocked && (
+                        <>
+                          {/* subtle dark overlay so the blurred image reads as locked */}
+                          <div className="absolute inset-0 pointer-events-none rounded-xl overflow-hidden">
+                            <div className="absolute inset-0 bg-black/25 rounded-xl" />
                           </div>
-                        </div>
 
-                        {/* small top-left badge */}
-                        <div className="absolute top-2 left-2 bg-black/40 px-2 py-1 rounded text-white text-[11px]">Pay to unlock</div>
-                      </>
-                    )}
-                  </div>
-                ))
+                          {/* centered lock icon */}
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <div className="bg-white/90 rounded-full p-2 shadow-lg">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-gray-800" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 17a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" fill="currentColor" />
+                                <path d="M7 10V8a5 5 0 0 1 10 0v2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                                <rect x="4" y="10" width="16" height="10" rx="2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+                              </svg>
+                            </div>
+                          </div>
+
+                          {/* small top-left badge */}
+                          <div className="absolute top-2 left-2 bg-black/40 px-2 py-1 rounded text-white text-[11px]">Pay to unlock</div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })
               ) : (
                 // fallback: original local options (unchanged behaviour)
                 backgroundOptions.map((fn) => (
