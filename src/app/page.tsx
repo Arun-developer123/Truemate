@@ -1,19 +1,121 @@
-/* -------------------------------------------------------------------------
-  FILE: src/app/page.tsx
-  PURPOSE: Marketing/homepage for Truemate (server component)
--------------------------------------------------------------------------*/
+"use client";
 
-export const metadata = {
-  title: "Truemate — Your caring AI companion",
-  description:
-    "Truemate: proactive, emotionally-intelligent AI friend. Daily check-ins, reminders, safe (adult-free) conversations, and a humanlike companion named Aarvi.",
-};
-
+import React, { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import AarviCarousel from "@/components/AarviCarousel"; // make sure path matches
-import React from "react";
+import AarviCarousel from "@/components/AarviCarousel"; // ensure this path exists
 
+// Small client-side Install button that handles the PWA `beforeinstallprompt` flow
+function InstallButton(): React.JSX.Element {
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showIosInstallHint, setShowIosInstallHint] = useState(false);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    // Listen for the `beforeinstallprompt` event (Chrome/Edge/Android)
+    const onBefore = (e: Event) => {
+      // prevent the browser from automatically showing the mini-infobar
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    // Some browsers (iOS Safari) don't fire beforeinstallprompt; we show an iOS hint instead
+    const isIos = () => {
+      if (typeof window === "undefined") return false;
+      const ua = window.navigator.userAgent.toLowerCase();
+      return /iphone|ipad|ipod/.test(ua) && !/chrome|crios|android/.test(ua);
+    };
+
+    window.addEventListener("beforeinstallprompt", onBefore as EventListener);
+
+    // Detect if already installed: `appinstalled` event or check display-mode
+    const onAppInstalled = () => setInstalled(true);
+    window.addEventListener("appinstalled", onAppInstalled);
+
+    // On mount decide if we should show iOS instructions
+    if (isIos()) {
+      // do not show immediately; only show when user explicitly tries to install
+      // but we set the flag so the UI can present a dedicated hint
+      setShowIosInstallHint(true);
+    }
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBefore as EventListener);
+      window.removeEventListener("appinstalled", onAppInstalled);
+    };
+  }, []);
+
+  // Trigger the browser install prompt
+  const handleInstallClick = async () => {
+    // If we have the deferred prompt (Chrome/Edge/Android)
+    if (deferredPrompt) {
+      try {
+        await deferredPrompt.prompt();
+        const choice = await deferredPrompt.userChoice;
+        if (choice && choice.outcome === "accepted") {
+          setInstalled(true);
+        }
+      } catch (e) {
+        console.warn("Install prompt failed:", e);
+      } finally {
+        setDeferredPrompt(null);
+      }
+      return;
+    }
+
+    // Fallback for iOS: show short instructions
+    const isIos = () => {
+      if (typeof window === "undefined") return false;
+      const ua = window.navigator.userAgent.toLowerCase();
+      return /iphone|ipad|ipod/.test(ua) && !/chrome|crios|android/.test(ua);
+    };
+
+    if (isIos()) {
+      // show a friendly modal-like hint using alert (keeps this component self-contained)
+      alert(
+        "To install Truemate on iPhone/iPad: tap the Share button (in Safari), then choose 'Add to Home Screen'."
+      );
+      return;
+    }
+
+    // If nothing available, tell user how to install manually
+    alert("Your browser doesn't support the automatic install prompt. To install, open the browser menu and choose 'Add to Home screen' or use browser's install UI.");
+  };
+
+  // If already installed, hide the button
+  if (installed) return <span className="text-sm text-slate-200">Installed ✓</span>;
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={handleInstallClick}
+        className="inline-flex items-center gap-2 bg-emerald-700 text-white px-3 py-2 rounded-lg shadow hover:opacity-95"
+        title="Install Truemate"
+      >
+        {/* simple install icon */}
+        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none">
+          <path d="M12 3v12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M7 8l5-5 5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          <rect x="3" y="15" width="18" height="6" rx="1" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+        <span className="text-sm font-semibold">Install</span>
+      </button>
+
+      {/* Small iOS hint icon if appropriate */}
+      {showIosInstallHint && (
+        <button
+          onClick={() => alert("On iOS Safari: tap Share → Add to Home Screen to install Truemate.")}
+          className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-800"
+          aria-label="iOS install instructions"
+        >
+          iOS help
+        </button>
+      )}
+    </div>
+  );
+}
+
+// --- Page (client) ---
 export default function Page() {
   const aarviImages = [
     "/images/aarvi1.jpg",
@@ -27,9 +129,7 @@ export default function Page() {
     <main className="min-h-screen bg-gradient-to-b from-white via-emerald-50 to-emerald-100 text-slate-900">
       <header className="container mx-auto px-6 py-8 flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center text-white font-bold text-lg">
-            TM
-          </div>
+          <div className="w-12 h-12 bg-emerald-600 rounded-full flex items-center justify-center text-white font-bold text-lg">TM</div>
           <div>
             <h1 className="text-2xl font-extrabold tracking-tight">Truemate</h1>
             <p className="text-sm text-slate-600">Your humanlike, emotionally intelligent AI companion</p>
@@ -38,6 +138,10 @@ export default function Page() {
 
         <nav className="flex items-center gap-4">
           <span className="text-sm text-slate-700">450+ clicks • Early access</span>
+
+          {/* Install button inserted here */}
+          <InstallButton />
+
           <Link href="/signup" className="inline-block bg-emerald-700 text-white px-4 py-2 rounded-lg shadow hover:opacity-95">
             Get Early Access
           </Link>
@@ -48,9 +152,7 @@ export default function Page() {
       <section className="container mx-auto px-6 py-8 grid md:grid-cols-2 gap-10 items-center">
         <div>
           <p className="text-sm uppercase tracking-wide text-emerald-700 font-semibold">Proactive • Gentle • Safe</p>
-          <h2 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
-            Meet Aarvi — Truemate’s caring AI friend, ready for real conversations.
-          </h2>
+          <h2 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">Meet Aarvi — Truemate’s caring AI friend, ready for real conversations.</h2>
 
           <p className="mt-6 text-lg text-slate-700">
             Truemate is built to feel like a thoughtful, dependable human friend. Aarvi checks in proactively,
@@ -145,7 +247,7 @@ export default function Page() {
 
           <article className="p-6 bg-white rounded-2xl shadow">
             <h4 className="font-semibold">Privacy-first design</h4>
-            <p className="mt-2 text-sm text-slate-600">We keep your conversations private and secure; you control what is saved.</p>
+            <p className="mt-2 text-sm text-slate-600">We keep your conversations private and secure; you control what is stored.</p>
           </article>
 
           <article className="p-6 bg-white rounded-2xl shadow">
