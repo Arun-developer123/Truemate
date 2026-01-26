@@ -10,7 +10,6 @@ import { registerPushForUser } from "@/lib/registerPush";
 import SubscribeButton from "@/components/SubscribeButton";
 import FreeChatsManager from "@/components/FreeChatsManager";
 
-
 // NOTE: If you want to persist background choices in DB, add this column to your users_data table:
 // ALTER TABLE public.users_data ADD COLUMN IF NOT EXISTS background_image text;
 
@@ -46,6 +45,9 @@ export default function HomePage(): React.JSX.Element {
   const [showGallery, setShowGallery] = useState(false);
   // default to primary image — this ensures an image is always visible
   const [selectedBackground, setSelectedBackground] = useState<string>("/aarvi.jpg");
+  // keep filename from DB (if user had previously selected a paid background)
+  const [selectedBackgroundFilename, setSelectedBackgroundFilename] = useState<string | null>(null);
+
   const router = useRouter();
 
   // Dropdown menu state & refs (NEW)
@@ -131,7 +133,18 @@ export default function HomePage(): React.JSX.Element {
             setMessages(clean);
           }
           if (existingData.background_image) {
-            setSelectedBackground(`/${existingData.background_image}`);
+            // IMPORTANT: never set `/filename` for private images.
+            // store filename to try to resolve after gallery list loads
+            const fn = existingData.background_image;
+            setSelectedBackgroundFilename(fn);
+
+            if (fn === "aarvi.jpg") {
+              // free public image -> safe to set directly
+              setSelectedBackground("/aarvi.jpg");
+            } else {
+              // paid image -> keep fallback (public default) until we resolve signedUrl
+              setSelectedBackground("/aarvi.jpg");
+            }
           }
         }
       }
@@ -157,16 +170,35 @@ export default function HomePage(): React.JSX.Element {
         const json = await res.json();
         if (json?.ok && Array.isArray(json.items)) {
           // Fix any broken thumbUrl that was accidentally created using undefined env var
-          const fixed = json.items.map((it: any) => {
+          const fixed: BackgroundItem[] = json.items.map((it: any) => {
             const name = it.name;
             let thumbUrl = it.thumbUrl || `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
             // defensive: if thumbUrl contains "undefined/" or doesn't start with http/"/", fallback to relative path
-            if (typeof thumbUrl === "string" && (thumbUrl.includes("undefined/") || !/^\//.test(thumbUrl) && !/^https?:\/\//.test(thumbUrl))) {
+            if (typeof thumbUrl === "string" && (thumbUrl.includes("undefined/") || (!/^\//.test(thumbUrl) && !/^https?:\/\//.test(thumbUrl)))) {
               thumbUrl = `/api/backgrounds/thumb?file=${encodeURIComponent(name)}`;
             }
-            return { ...it, thumbUrl };
+            return {
+              name,
+              isUnlocked: Boolean(it.isUnlocked),
+              thumbUrl,
+              signedUrl: it.signedUrl ?? null,
+            };
           });
           setBackgrounds(fixed);
+
+          // If we loaded a filename from DB earlier, try resolve it now:
+          if (selectedBackgroundFilename && selectedBackgroundFilename !== "aarvi.jpg") {
+            const matched = fixed.find((f) => f.name === selectedBackgroundFilename);
+            if (matched) {
+              // if unlocked and signedUrl present, apply it now
+              if (matched.isUnlocked && matched.signedUrl) {
+                setSelectedBackground(matched.signedUrl);
+              } else {
+                // otherwise keep fallback (aarvi.jpg) until user unlocks
+                // no-op
+              }
+            }
+          }
         } else {
           console.warn("backgrounds list returned no items:", json);
         }
@@ -175,7 +207,8 @@ export default function HomePage(): React.JSX.Element {
       }
     };
     load();
-  }, [userEmail]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userEmail, selectedBackgroundFilename]);
 
   // --- Realtime listener for chat updates ---
   useEffect(() => {
@@ -194,7 +227,6 @@ export default function HomePage(): React.JSX.Element {
       setMessages(clean);
 
       const latest = clean[clean.length - 1];
-      
     };
 
     const channel = supabase
@@ -305,6 +337,9 @@ export default function HomePage(): React.JSX.Element {
         } else {
           console.warn("Failed to save background preference:", msg);
         }
+      } else {
+        // update our local filename state so gallery resolution can apply immediately
+        setSelectedBackgroundFilename(imageFilename);
       }
     } catch (e) {
       console.warn("Failed to save background preference", e);
@@ -313,82 +348,77 @@ export default function HomePage(): React.JSX.Element {
 
   // --- Handle send ---
   const handleSend = async () => {
-  if (!input.trim() || !userEmail || sending) return;
-  setSending(true);
+    if (!input.trim() || !userEmail || sending) return;
+    setSending(true);
 
-  try {
-    // 🔒 STEP 1: CHECK FREE CHAT LIMIT (BEFORE ANY UI CHANGE)
-    const usage = await fetch("/api/user/use-chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: user?.id }),
-    });
+    try {
+      // 🔒 STEP 1: CHECK FREE CHAT LIMIT (BEFORE ANY UI CHANGE)
+      const usage = await fetch("/api/user/use-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user?.id }),
+      });
 
-    const usageData = await usage.json();
+      const usageData = await usage.json();
 
-    if (!usageData.ok) {
-      alert("Free chats finished. Please upgrade.");
+      if (!usageData.ok) {
+        alert("Free chats finished. Please upgrade.");
+        setSending(false);
+        return;
+      }
+
+      // ✅ STEP 2: NOW SAFE TO ADD MESSAGE
+      const userMsg: Message = { role: "user", content: input };
+      const optimistic = [...messagesRef.current, userMsg];
+
+      setMessages(optimistic);
+      setInput("");
+
+      // 🤖 STEP 3: CALL AI
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: input,
+          email: userEmail,
+          userId: user?.id,
+        }),
+      });
+
+      const data = await res.json();
+      const reply = data.choices?.[0]?.message?.content || "⚠️ Empty response";
+
+      const assistantMsg: Message = {
+        role: "assistant",
+        content: reply,
+      };
+
+      const updatedMessages: Message[] = [...optimistic, assistantMsg];
+
+      setMessages(updatedMessages);
+
+      await supabase
+        .from("users_data")
+        .update({
+          chat: updatedMessages,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("email", userEmail);
+
+      await fetch("/api/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: userEmail,
+          message: input,
+        }),
+      });
+    } catch (err: any) {
+      console.error("handleSend failed:", err);
+    } finally {
       setSending(false);
-      return;
     }
-
-    // ✅ STEP 2: NOW SAFE TO ADD MESSAGE
-    const userMsg: Message = { role: "user", content: input };
-    const optimistic = [...messagesRef.current, userMsg];
-
-    setMessages(optimistic);
-    setInput("");
-
-    // 🤖 STEP 3: CALL AI
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: input,
-        email: userEmail,
-        userId: user?.id,
-      }),
-    });
-
-    const data = await res.json();
-    const reply =
-      data.choices?.[0]?.message?.content || "⚠️ Empty response";
-
-    const assistantMsg: Message = {
-      role: "assistant",
-      content: reply,
-    };
-
-    const updatedMessages: Message[] = [
-      ...optimistic,
-      assistantMsg,
-    ];
-
-    setMessages(updatedMessages);
-
-    await supabase
-      .from("users_data")
-      .update({
-        chat: updatedMessages,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("email", userEmail);
-
-    await fetch("/api/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: userEmail,
-        message: input,
-      }),
-    });
-  } catch (err: any) {
-    console.error("handleSend failed:", err);
-  } finally {
-    setSending(false);
-  }
-};
-
+  };
 
   // --- Before unload: flush chat ---
   useEffect(() => {
@@ -570,7 +600,12 @@ export default function HomePage(): React.JSX.Element {
 
   const isSelected = (it: BackgroundItem) => {
     try {
-      return selectedBackground && selectedBackground.endsWith(it.name);
+      // match by signedUrl (preferred) or by filename fallback
+      if (it.signedUrl && selectedBackground === it.signedUrl) return true;
+      if (selectedBackground && selectedBackground.endsWith(it.name)) return true;
+      // also consider public default
+      if (it.name === "aarvi.jpg" && selectedBackground === "/aarvi.jpg") return true;
+      return false;
     } catch {
       return false;
     }
@@ -616,9 +651,16 @@ export default function HomePage(): React.JSX.Element {
   // --- Gallery select (keeps existing saveBackgroundPreference behavior) ---
   const selectBackground = (filename: string, signedUrl?: string | null) => {
     if (signedUrl) {
+      // unlocked paid image => use signed URL directly (secure)
       setSelectedBackground(signedUrl);
     } else {
-      setSelectedBackground(`/${filename}`);
+      // no signedUrl provided — only safe direct file we allow is the public default
+      if (filename === "aarvi.jpg") {
+        setSelectedBackground("/aarvi.jpg");
+      } else {
+        // private image not unlocked: keep default public image as safe fallback
+        setSelectedBackground("/aarvi.jpg");
+      }
     }
     saveBackgroundPreference(filename);
     setShowGallery(false);
@@ -695,8 +737,6 @@ export default function HomePage(): React.JSX.Element {
           else openChatWithAarvi();
           return;
         }
-
-        
       } catch (e) {
         // ignore
       }
@@ -713,7 +753,7 @@ export default function HomePage(): React.JSX.Element {
         aria-hidden
         className="absolute inset-0 bg-cover bg-center transition-all duration-700"
         style={{
-          backgroundImage: `linear-gradient(rgba(0,0,0,0.06), rgba(0,0,0,0.14)), url('${selectedBackground}')`,
+          backgroundImage: selectedBackground ? `linear-gradient(rgba(0,0,0,0.06), rgba(0,0,0,0.14)), url('${selectedBackground}')` : undefined,
           backgroundSize: "cover",
           backgroundPosition: "center",
         }}
@@ -781,8 +821,6 @@ export default function HomePage(): React.JSX.Element {
 
                 <div className="border-t my-1" />
 
-                
-
                 <div className="border-t my-1" />
 
                 <button onClick={handleSignOut} className="w-full text-left px-3 py-2 rounded-lg hover:bg-gray-100 flex items-center gap-2">
@@ -811,16 +849,10 @@ export default function HomePage(): React.JSX.Element {
               <div className="ml-auto text-sm text-white/90">{unreadCount > 0 ? `${unreadCount} new` : "All caught up"}</div>
             </div>
 
-
             {/* Free chats banner / upgrade manager */}
-<div className="px-6 py-2 border-b border-white/10">
-  <FreeChatsManager
-    userEmail={userEmail}
-    userId={user?.id}
-    messages={messages}
-  />
-</div>
-
+            <div className="px-6 py-2 border-b border-white/10">
+              <FreeChatsManager userEmail={userEmail} userId={user?.id} messages={messages} />
+            </div>
 
             {/* messages list */}
             <div className="p-6 overflow-y-auto flex-1" id="chat-scroll" ref={containerRef}>
@@ -848,9 +880,7 @@ export default function HomePage(): React.JSX.Element {
                   </div>
                 ))}
 
-                {messages.length === 0 && (
-                  <div className="text-center text-white/95 py-12 text-lg">Say hi to Aarvi — she is listening. ❤️</div>
-                )}
+                {messages.length === 0 && <div className="text-center text-white/95 py-12 text-lg">Say hi to Aarvi — she is listening. ❤️</div>}
               </div>
             </div>
 
@@ -892,7 +922,9 @@ export default function HomePage(): React.JSX.Element {
           <div className="relative z-10 max-w-xl w-full bg-white/95 rounded-2xl p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold">Choose background</h2>
-              <button onClick={() => setShowGallery(false)} className="text-gray-600 px-3 py-1 rounded hover:bg-gray-100">Close</button>
+              <button onClick={() => setShowGallery(false)} className="text-gray-600 px-3 py-1 rounded hover:bg-gray-100">
+                Close
+              </button>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
