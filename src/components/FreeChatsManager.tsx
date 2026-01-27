@@ -11,23 +11,42 @@ export default function FreeChatsManager({
   userEmail,
   userId,
   messages,
+  remaining: externalRemaining, // 🔥 parent se aane wala realtime remaining
 }: {
   userEmail: string | null;
   userId?: string | null;
   messages: Message[];
+  remaining?: number | null;
 }) {
   /**
    * remaining meanings:
-   * null  -> unlimited (subscribed)
-   * number -> free chats remaining
-   * undefined -> still loading
+   * null       -> unlimited (subscribed)
+   * number     -> free chats remaining
+   * undefined  -> still loading
    */
   const [remaining, setRemaining] = useState<number | null | undefined>(undefined);
   const [showModal, setShowModal] = useState(false);
 
-  // 🔹 Fetch remaining chats (READ ONLY)
+  // 🔥 REALTIME SYNC FROM PARENT (chat page)
+  useEffect(() => {
+    if (externalRemaining !== undefined) {
+      setRemaining(externalRemaining);
+
+      if (
+        typeof externalRemaining === "number" &&
+        externalRemaining <= 5
+      ) {
+        setShowModal(true);
+      }
+    }
+  }, [externalRemaining]);
+
+  // 🔹 Peek API (READ ONLY) → only for first load / fallback
   useEffect(() => {
     if (!userId) return;
+
+    // 🔒 agar parent already truth de raha hai, peek skip
+    if (externalRemaining !== undefined) return;
 
     const controller = new AbortController();
 
@@ -52,7 +71,6 @@ export default function FreeChatsManager({
         if (typeof d.remaining === "number") {
           setRemaining(d.remaining);
 
-          // show warning modal only for free users
           if (d.remaining <= 5) {
             setShowModal(true);
           }
@@ -64,7 +82,7 @@ export default function FreeChatsManager({
       });
 
     return () => controller.abort();
-  }, [userId]);
+  }, [userId, externalRemaining]);
 
   // 🔹 Text to show in header
   const remainingText =
