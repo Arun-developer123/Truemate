@@ -6,11 +6,90 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const message: string = body.message;
-    const summary: string | undefined = body.summary;
+    const summary: string | undefined = body.summary; // long-term compressed summary (optional, from client)
     const email: string | undefined = body.email;
     const userId: string | undefined = body.userId;
 
-    // 1️⃣ Chat completion (unchanged)
+    // ---- Fetch short-term and identity memory from DB (if we have a user) ----
+    let fetchedRow: any = null;
+    try {
+      if (email || userId) {
+        const selector = email ? { col: "email", val: email } : { col: "id", val: userId! };
+        const { data: row, error } = await supabaseServer
+          .from("users_data")
+          .select("chat, ai_summary, chat_summary")
+          .eq(selector.col, selector.val)
+          .maybeSingle();
+        if (error) {
+          console.warn("Failed to fetch users_data for memory:", error);
+        } else {
+          fetchedRow = row;
+        }
+      }
+    } catch (e) {
+      console.warn("users_data fetch error:", e);
+    }
+
+    // ---- Build memory contexts ----
+    // LONG-TERM summary: prefer client-provided `summary`, fallback to DB chat_summary
+    const longTermSummary = (summary && typeof summary === "string" && summary.trim().length > 0)
+      ? summary.trim()
+      : (fetchedRow?.chat_summary ? String(fetchedRow.chat_summary).trim() : "");
+
+    // SHORT-TERM recent chat (last N messages)
+    let recentChatContext = "";
+    try {
+      if (Array.isArray(fetchedRow?.chat) && fetchedRow.chat.length > 0) {
+        const lastMessages = fetchedRow.chat.slice(-8); // keep last 8 messages
+        const lines = lastMessages.map((m: any) => {
+          const role = m?.role === "user" ? "User" : "Aarvi";
+          const content = (m?.content ?? "").toString().replace(/\s+/g, " ").trim();
+          return content ? `${role}: ${content}` : "";
+        }).filter(Boolean);
+        recentChatContext = lines.join("\n");
+      }
+    } catch (e) {
+      console.warn("Failed to build recentChatContext:", e);
+      recentChatContext = "";
+    }
+
+    // IDENTITY / AI memory (ai_summary array -> bullets)
+    let aiMemoryContext = "";
+    try {
+      if (Array.isArray(fetchedRow?.ai_summary) && fetchedRow.ai_summary.length > 0) {
+        aiMemoryContext = fetchedRow.ai_summary
+          .map((s: any) => `- ${String(s).trim()}`)
+          .filter(Boolean)
+          .join("\n");
+      }
+    } catch (e) {
+      console.warn("Failed to build aiMemoryContext:", e);
+      aiMemoryContext = "";
+    }
+
+    // ---- Chat completion (system prompt includes all memory layers) ----
+    const systemPrompt = `
+You are Aarvi, a warm and supportive young woman.
+- Always reply in short, natural, human-like messages.
+- Never reveal you are an AI.
+- Live a realistic daily life.
+
+LONG-TERM USER CONTEXT (compressed):
+${longTermSummary && longTermSummary.length > 0 ? longTermSummary : "No long-term summary yet."}
+
+RECENT CONVERSATION (short-term, last messages):
+${recentChatContext && recentChatContext.length > 0 ? recentChatContext : "No recent messages."}
+
+YOUR PERSONAL MEMORY (things you've shared about yourself, bullets):
+${aiMemoryContext && aiMemoryContext.length > 0 ? aiMemoryContext : "No personal memories yet."}
+
+Rules:
+- Use the recent conversation to respond in-context.
+- Keep replies short and human-like.
+- Stay consistent with your personal memory; do not contradict prior facts.
+- Do not say you are an AI or reference memory-storage mechanics.
+`.trim();
+
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -20,14 +99,7 @@ export async function POST(req: Request) {
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
         messages: [
-          {
-            role: "system",
-            content: `You are Aarvi, a warm and supportive young woman.
-- Always reply in short, natural, human-like messages.
-- Never reveal you are an AI.
-- Live a realistic daily life.
-- Past context: ${summary || "No past chats yet."}`,
-          },
+          { role: "system", content: systemPrompt },
           { role: "user", content: message },
         ],
       }),
@@ -35,20 +107,20 @@ export async function POST(req: Request) {
 
     const data = await res.json();
 
-    // 2️⃣ Extract assistant reply safely
+    // ---- Extract assistant reply safely ----
     let assistantContent = "";
     if (Array.isArray((data as any)?.choices) && (data as any).choices.length > 0) {
       const c = (data as any).choices[0];
       assistantContent = c?.message?.content ?? c?.text ?? "";
     }
 
-    // 3) Build a short AI-side summary for this assistant reply (always attempt)
+    // ---- Build a short AI-side summary + extract facts (unchanged logic) ----
     let aiMessageSummary = "";
     let extractedFacts: string[] = [];
 
     if (assistantContent && (email || userId)) {
       try {
-        // 3.a) First: try to extract short facts as JSON array
+        // 1) Extract facts as JSON array
         const extractor = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -87,7 +159,7 @@ export async function POST(req: Request) {
         extractedFacts = [];
       }
 
-      // 3.b) Additionally: create a short 1-line summary of the assistant reply (useful when there are no explicit facts)
+      // 2) Create short 1-line summary of the assistant reply
       try {
         const summarizer = await fetch("https://api.groq.com/openai/v1/chat/completions", {
           method: "POST",
@@ -119,38 +191,39 @@ export async function POST(req: Request) {
       }
     }
 
-    // 4️⃣ GUARANTEED ai_summary initialization + merge (append facts + short summary)
+    // ---- Merge into ai_summary (preserve existing, append unique facts + summary) ----
     if (email || userId) {
       const selector = email ? { col: "email", val: email } : { col: "id", val: userId! };
 
-      // fetch existing ai_summary (if any)
-      const { data: row, error: fetchErr } = await supabaseServer
-        .from("users_data")
-        .select("ai_summary")
-        .eq(selector.col, selector.val)
-        .maybeSingle();
-
-      if (fetchErr) {
-        console.warn("Failed to fetch users_data.ai_summary:", fetchErr);
+      // Use previously fetched ai_summary if available, else fetch to be safe
+      let existing: string[] = [];
+      if (Array.isArray(fetchedRow?.ai_summary)) {
+        existing = fetchedRow.ai_summary;
+      } else {
+        try {
+          const { data: row2, error: fetchErr2 } = await supabaseServer
+            .from("users_data")
+            .select("ai_summary")
+            .eq(selector.col, selector.val)
+            .maybeSingle();
+          if (!fetchErr2 && Array.isArray(row2?.ai_summary)) existing = row2.ai_summary;
+        } catch (e) {
+          console.warn("Fallback fetch users_data.ai_summary failed:", e);
+        }
       }
-
-      const existing: string[] = Array.isArray((row as any)?.ai_summary) ? (row as any).ai_summary : [];
 
       const merged = Array.isArray(existing) ? [...existing] : [];
 
-      // append any extracted facts (unique)
       for (const f of extractedFacts) {
         const clean = (f || "").trim();
         if (clean && !merged.includes(clean)) merged.push(clean);
       }
 
-      // ALSO append aiMessageSummary if non-empty and not duplicate
       if (aiMessageSummary) {
         const cleanSum = aiMessageSummary.trim();
         if (cleanSum && !merged.includes(cleanSum)) merged.push(cleanSum);
       }
 
-      // ALWAYS update — even if empty → converts NULL -> []
       try {
         const { error: updateErr } = await supabaseServer
           .from("users_data")
@@ -167,7 +240,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 5) Return original model response to frontend
+    // ---- Return original model response to frontend ----
     return NextResponse.json(data);
   } catch (err) {
     console.error("chat route error:", err);
