@@ -22,24 +22,35 @@ export async function middleware(req: NextRequest) {
     }
   );
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
+  const { data: { session } } = await supabase.auth.getSession();
   const pathname = req.nextUrl.pathname;
 
-  // 🔒 protect home
+  // 🚫 Not logged in → protect home
   if (!session && pathname.startsWith("/home")) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/signin";
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(new URL("/signin", req.url));
   }
 
-  // 🔁 logged-in user should not access auth pages
-  if (session && (pathname === "/signin" || pathname === "/signup")) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/home";
-    return NextResponse.redirect(url);
+  // ✅ Logged in → verify DB user exists
+  if (session) {
+    const email = session.user.email;
+
+    const { data: userRow } = await supabase
+      .from("users_data")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
+
+    // ⚠️ Auth user exists but app user missing
+    if (!userRow) {
+      // force clean auth
+      const redirectUrl = new URL("/signup", req.url);
+      return NextResponse.redirect(redirectUrl);
+    }
+
+    // Logged-in users should not see auth pages
+    if (pathname === "/signin" || pathname === "/signup") {
+      return NextResponse.redirect(new URL("/home", req.url));
+    }
   }
 
   return res;
