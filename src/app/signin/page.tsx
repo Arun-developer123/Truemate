@@ -214,9 +214,7 @@ export default function SignInPage() {
             {resetMessage && (
               <div className="text-sm mt-2">{resetMessage}</div>
             )}
-            <div className="text-xs mt-2 text-gray-600">
-              After clicking the link in your email you will be redirected to <code>/update-password</code> to set a new password.
-            </div>
+            
           </form>
         </div>
       )}
