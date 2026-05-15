@@ -6,6 +6,24 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Heart, Lock, MessageCircleHeart, Sparkles, ChevronRight } from "lucide-react";
 
+const INTRO_SEEN_COOKIE = "truemate_intro_seen";
+const INTRO_REQUIRED_COOKIE = "truemate_intro_required";
+const LAST_ACTIVE_COOKIE = "truemate_last_active";
+
+function getCookie(name: string) {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function setCookie(name: string, value: string, maxAgeSeconds: number) {
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSeconds}; samesite=lax`;
+}
+
+function deleteCookie(name: string) {
+  document.cookie = `${name}=; path=/; max-age=0; samesite=lax`;
+}
+
 export default function IntroPage() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
@@ -14,8 +32,14 @@ export default function IntroPage() {
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-    const seen = localStorage.getItem("truemate_intro_seen");
-    if (seen === "1") router.replace("/home");
+    const introSeenCookie = getCookie(INTRO_SEEN_COOKIE);
+    const introSeenStorage =
+      typeof window !== "undefined" ? localStorage.getItem("truemate_intro_seen") : null;
+    const introRequired = getCookie(INTRO_REQUIRED_COOKIE) === "1";
+
+    if ((introSeenCookie === "1" || introSeenStorage === "1") && !introRequired) {
+      router.replace("/home");
+    }
   }, [router]);
 
   useEffect(() => {
@@ -46,6 +70,9 @@ export default function IntroPage() {
 
   const handleStart = () => {
     localStorage.setItem("truemate_intro_seen", "1");
+    setCookie(INTRO_SEEN_COOKIE, "1", 60 * 60 * 24 * 365);
+    setCookie(LAST_ACTIVE_COOKIE, String(Date.now()), 60 * 60 * 24 * 365);
+    deleteCookie(INTRO_REQUIRED_COOKIE);
     router.push("/home");
   };
 

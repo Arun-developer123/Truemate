@@ -155,7 +155,7 @@ export default function SettingsPage() {
       const authUser = authData?.user;
 
       if (!authUser) {
-        router.replace("/auth/sign-in");
+        router.replace("/sign-in");
         return;
       }
 

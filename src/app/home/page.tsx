@@ -8,23 +8,36 @@ import {
   ChevronLeft,
   Crown,
   Heart,
-  LayoutGrid,
   MessageCircle,
   Menu,
   Sparkles,
   Smile,
   User,
-  Zap,
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 
 type MoodKey = "happy" | "calm" | "tired" | "stressed" | "lonely";
 
+type MemoryMoment = {
+  id: string;
+  title: string;
+  detail: string;
+  tag: string;
+};
+
+type JournalEntry = {
+  id: string;
+  text: string;
+  mood: MoodKey;
+  createdAt: string;
+};
+
 type HomeData = {
   display_name: string;
   avatar_url: string;
   background_image: string;
+  chat_summary: string;
   quote_text: string;
   home_subtitle: string;
   presence_label: string;
@@ -41,11 +54,17 @@ type HomeData = {
   current_streak_days: number;
   best_streak_days: number;
   total_conversations: number;
+  total_user_messages: number;
+  total_ai_messages: number;
   total_messages: number;
   profile_completion_score: number;
   timezone: string;
   streak_last_date: string | null;
   last_seen_at: string | null;
+  last_message_at: string | null;
+  last_chat_at: string | null;
+  moments: MemoryMoment[];
+  journal_entries: JournalEntry[];
 };
 
 type JourneyItem = {
@@ -55,17 +74,14 @@ type JourneyItem = {
   accent: string;
 };
 
-type JournalEntry = {
-  id: string;
-  text: string;
-  mood: MoodKey;
-  createdAt: string;
-};
-
-type MemoryMoment = {
-  title: string;
-  detail: string;
-  tag: string;
+type ChatStats = {
+  conversations: number;
+  userMessages: number;
+  aiMessages: number;
+  totalMessages: number;
+  lastMessage: string;
+  lastMessageAt: string | null;
+  lastChatAt: string | null;
 };
 
 const QUICK_PROMPTS = [
@@ -102,13 +118,6 @@ const MOODS: Array<{
   { key: "lonely", label: "Lonely", emoji: "🥺", hint: "extra warm, close, supportive" },
 ];
 
-const JOURNEY: JourneyItem[] = [
-  { title: "First hello", subtitle: "The moment the space opened up for you.", time: "Today", accent: "A soft beginning" },
-  { title: "Your first honest share", subtitle: "A little more trust, a little more closeness.", time: "This week", accent: "Trust started growing" },
-  { title: "A hard day, handled together", subtitle: "The kind of moment that makes the bond feel real.", time: "Recent", accent: "Stayed with you" },
-  { title: "Tiny joyful memory", subtitle: "A small thing that still feels warm to revisit.", time: "Saved", accent: "A comforting moment" },
-];
-
 const MAGIC_LINES = [
   "Tiny surprise: today has a softer ending waiting for you ✨",
   "Psst... you’re doing better than you think 💛",
@@ -120,34 +129,57 @@ const MAGIC_LINES = [
 ];
 
 const DEFAULT_DATA: HomeData = {
-  display_name: "Arun",
+  display_name: "Friend",
   avatar_url: "",
   background_image: "",
-  quote_text: "Every day is better when we talk with each other.",
+  chat_summary: "",
+  quote_text: "A gentle place for your thoughts.",
   home_subtitle: "Close, warm & private conversations",
   presence_label: "Online",
-  presence_message: "I’m here, ready to talk 💜",
+  presence_message: "I’m here when you want to talk 💜",
   mood_key: "calm",
-  mood_title: "Soft 💜",
-  mood_description: "A calm, warm vibe with gentle words and slower energy.",
-  mood_emoji: "🥰",
-  last_conversation_title: "You & Aarvi",
-  last_conversation_time_label: "10:32 PM",
-  last_conversation_last_message: "Tum hamesha itna overthink kyu karte ho? 🤔",
-  last_conversation_unread_count: 3,
-  free_chats_remaining: 8,
-  current_streak_days: 7,
-  best_streak_days: 19,
-  total_conversations: 32,
-  total_messages: 184,
-  profile_completion_score: 78,
+  mood_title: "Calm",
+  mood_description: "A gentle, steady space.",
+  mood_emoji: "😌",
+  last_conversation_title: "Latest conversation",
+  last_conversation_time_label: "--:--",
+  last_conversation_last_message: "No saved conversation yet.",
+  last_conversation_unread_count: 0,
+  free_chats_remaining: 30,
+  current_streak_days: 0,
+  best_streak_days: 0,
+  total_conversations: 0,
+  total_user_messages: 0,
+  total_ai_messages: 0,
+  total_messages: 0,
+  profile_completion_score: 0,
   timezone: "Asia/Kolkata",
   streak_last_date: null,
   last_seen_at: null,
+  last_message_at: null,
+  last_chat_at: null,
+  moments: [],
+  journal_entries: [],
 };
 
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
+}
+
+function toText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function safeJson<T>(value: unknown, fallback: T): T {
+  try {
+    if (value == null) return fallback;
+    if (typeof value === "string") return JSON.parse(value) as T;
+    return value as T;
+  } catch {
+    return fallback;
+  }
 }
 
 function saveJson(key: string, value: unknown) {
@@ -179,6 +211,224 @@ function daysBetween(dateA: string, dateB: string) {
   const a = new Date(`${dateA}T00:00:00`);
   const b = new Date(`${dateB}T00:00:00`);
   return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
+function formatTime(dateString?: string | null) {
+  if (!dateString) return "Just now";
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return "Just now";
+  return new Intl.DateTimeFormat("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function normalizeMomentList(value: unknown): MemoryMoment[] {
+  const arr = safeJson<unknown[]>(value, []);
+  if (!Array.isArray(arr)) return [];
+
+  return arr
+    .map((item, index) => {
+      const raw = (item ?? {}) as Record<string, unknown>;
+      const title = toText(raw.title) || `Moment ${index + 1}`;
+      const detail = toText(raw.detail) || "A gentle memory stays here.";
+      const tag = toText(raw.tag) || "Memory";
+      const id = toText(raw.id) || `moment-${index}-${title}`;
+      return { id, title, detail, tag };
+    })
+    .filter((item) => item.title || item.detail)
+    .slice(0, 8);
+}
+
+function normalizeJournalEntries(value: unknown): JournalEntry[] {
+  const arr = safeJson<unknown[]>(value, []);
+  if (!Array.isArray(arr)) return [];
+
+  return arr
+    .map((item, index) => {
+      const raw = (item ?? {}) as Record<string, unknown>;
+      const text = toText(raw.text);
+      const mood = (toText(raw.mood) as MoodKey) || "calm";
+      const createdAt = toText(raw.createdAt) || new Date().toISOString();
+      const id = toText(raw.id) || `journal-${index}-${createdAt}`;
+      return { id, text, mood, createdAt };
+    })
+    .filter((item) => item.text.length > 0)
+    .slice(0, 60);
+}
+
+function splitSummaryIntoSnippets(summary: string) {
+  const cleaned = toText(summary);
+  if (!cleaned) return [];
+
+  return cleaned
+    .split(/\n+|(?<=[.!?])\s+/g)
+    .map((s) => s.replace(/^[•-\u2022]+\s*/, "").trim())
+    .filter(Boolean)
+    .map((s) => (s.length > 150 ? `${s.slice(0, 150).trimEnd()}…` : s))
+    .filter((s, index, arr) => arr.findIndex((x) => x.toLowerCase() === s.toLowerCase()) === index)
+    .slice(0, 6);
+}
+
+function buildMomentsFromSummary(summary: string, homeData: HomeData): MemoryMoment[] {
+  const snippets = splitSummaryIntoSnippets(summary);
+
+  const fallback1 = `Aarvi is holding this space with ${homeData.mood_title.toLowerCase()}.`;
+  const fallback2 = homeData.presence_message || "I’m here with you, gently.";
+  const fallback3 = homeData.quote_text || "A warm memory can live here.";
+  const fallback4 = "This space is still growing, one honest moment at a time.";
+
+  return [
+    {
+      id: "generated-1",
+      title: "What stays with us",
+      detail: snippets[0] || fallback1,
+      tag: "From chat_summary",
+    },
+    {
+      id: "generated-2",
+      title: "The feeling underneath",
+      detail: snippets[1] || fallback2,
+      tag: "Current thread",
+    },
+    {
+      id: "generated-3",
+      title: "A detail worth keeping",
+      detail: snippets[2] || fallback3,
+      tag: "Warm memory",
+    },
+    {
+      id: "generated-4",
+      title: "A note for what comes next",
+      detail: snippets[3] || fallback4,
+      tag: "Evolving",
+    },
+  ];
+}
+
+function mergeMomentLists(stored: MemoryMoment[], generated: MemoryMoment[]) {
+  const seen = new Set<string>();
+  const merged: MemoryMoment[] = [];
+
+  [...generated, ...stored].forEach((item) => {
+    const key = `${item.title}|${item.detail}|${item.tag}`.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(item);
+    }
+  });
+
+  return merged.slice(0, 6);
+}
+
+function extractLastMessageFromChat(chat: unknown): string {
+  const arr = safeJson<unknown[]>(chat, []);
+  if (!Array.isArray(arr)) return "";
+
+  for (let i = arr.length - 1; i >= 0; i -= 1) {
+    const item = (arr[i] ?? {}) as Record<string, unknown>;
+    const text =
+      toText(item.content) ||
+      toText(item.text) ||
+      toText(item.message) ||
+      toText(item.body) ||
+      "";
+    if (text) return text;
+  }
+
+  return "";
+}
+
+function deriveChatStats(row: Record<string, unknown> | null | undefined): ChatStats {
+  const chat = safeJson<unknown[]>(row?.chat, []);
+  const messages = Array.isArray(chat) ? chat : [];
+
+  const userMessages =
+    Number(row?.total_user_messages ?? 0) ||
+    messages.filter((m) => {
+      const item = (m ?? {}) as Record<string, unknown>;
+      const role = toText(item.role).toLowerCase();
+      return role === "user";
+    }).length;
+
+  const aiMessages =
+    Number(row?.total_ai_messages ?? 0) ||
+    messages.filter((m) => {
+      const item = (m ?? {}) as Record<string, unknown>;
+      const role = toText(item.role).toLowerCase();
+      return role === "assistant" || role === "ai" || role === "bot";
+    }).length;
+
+  const fallbackTotal = userMessages + aiMessages;
+  const totalMessages = Number(row?.total_messages ?? 0) || fallbackTotal || messages.length;
+
+  const conversations = Number(row?.total_conversations ?? 0) || (totalMessages > 0 ? 1 : 0);
+
+  const lastMessage = toText(row?.last_conversation_last_message) || extractLastMessageFromChat(messages);
+  const lastMessageAt = toText(row?.last_message_at) || null;
+  const lastChatAt = toText(row?.last_chat_at) || null;
+
+  return {
+    conversations,
+    userMessages,
+    aiMessages,
+    totalMessages,
+    lastMessage,
+    lastMessageAt,
+    lastChatAt,
+  };
+}
+
+function buildJourneyItems(homeData: HomeData, moments: MemoryMoment[]): JourneyItem[] {
+  const firstMoment = moments[0];
+  const secondMoment = moments[1];
+  const thirdMoment = moments[2];
+
+  return [
+    {
+      title: "A safe place to return to",
+      subtitle: homeData.home_subtitle,
+      time: "Today",
+      accent: homeData.presence_message,
+    },
+    {
+      title: "What’s been staying close",
+      subtitle: firstMoment?.detail || homeData.chat_summary || homeData.quote_text,
+      time: "From chat_summary",
+      accent: firstMoment?.tag || "Kept gently",
+    },
+    {
+      title: "How the bond is growing",
+      subtitle: `${homeData.current_streak_days} day streak · ${homeData.total_messages} saved messages`,
+      time: "Progress",
+      accent: homeData.mood_description,
+    },
+    {
+      title: "A memory worth returning to",
+      subtitle: secondMoment?.detail || thirdMoment?.detail || "The little things can become the important ones.",
+      time: "Recently",
+      accent: "Warm and private",
+    },
+    {
+      title: "A quiet promise",
+      subtitle: "You do not have to start over here. Come back exactly as you are.",
+      time: "Always",
+      accent: "Emotionally attached, but calm",
+    },
+  ];
+}
+
+async function updateUsersDataByAuthUserId(
+  authUserId: string,
+  patch: Record<string, unknown>
+) {
+  return supabase
+    .from("users_data")
+    .update({
+      ...patch,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("auth_user_id", authUserId);
 }
 
 function ModalShell({
@@ -220,7 +470,13 @@ function ModalShell({
   );
 }
 
-function GlassCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function GlassCard({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
     <div
       className={cn(
@@ -303,6 +559,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!sparkleOpen) return;
+
     const todayKey = getTodayInTimeZone(homeData.timezone || "Asia/Kolkata");
     const stored = loadJson<{ dateKey: string; index: number }>("truemate_daily_surprise", {
       dateKey: "",
@@ -318,6 +575,14 @@ export default function HomePage() {
     setMagicLineIndex(nextIndex);
     saveJson("truemate_daily_surprise", { dateKey: todayKey, index: nextIndex });
   }, [sparkleOpen, homeData.timezone]);
+
+  const displayedMoments = useMemo(() => {
+    const stored = normalizeMomentList(homeData.moments);
+    const generated = buildMomentsFromSummary(homeData.chat_summary, homeData);
+    return mergeMomentLists(stored, generated);
+  }, [homeData]);
+
+  const journeyItems = useMemo(() => buildJourneyItems(homeData, displayedMoments), [homeData, displayedMoments]);
 
   async function refreshHomeData() {
     if (refreshingRef.current) return;
@@ -344,82 +609,158 @@ export default function HomePage() {
       }
 
       const base = { ...DEFAULT_DATA };
-      const fetched = row || base;
-      const timeZone = (fetched.timezone || base.timezone || "Asia/Kolkata").trim() || "Asia/Kolkata";
+      const fetched = (row as Record<string, unknown> | null) || null;
+
+      const timeZone = (toText(fetched?.timezone) || base.timezone || "Asia/Kolkata").trim() || "Asia/Kolkata";
       const today = getTodayInTimeZone(timeZone);
 
-      const lastDate = typeof fetched.streak_last_date === "string" ? fetched.streak_last_date : null;
-      let currentStreak = Number(fetched.current_streak_days || 0);
-      let bestStreak = Number(fetched.best_streak_days || 0);
+      const chatSummary = toText(fetched?.chat_summary) || base.chat_summary;
+      const currentJournalEntries = normalizeJournalEntries(fetched?.journal_entries);
+      const storedMoments = normalizeMomentList(fetched?.moments);
+
+      const stats = deriveChatStats(fetched);
+
+      const lastDate = toText(fetched?.streak_last_date) || null;
+      let currentStreak = Number(fetched?.current_streak_days ?? 0);
+      let bestStreak = Number(fetched?.best_streak_days ?? 0);
       let nextStreakDate = lastDate;
       let shouldUpdateStreak = false;
 
       if (!lastDate) {
-        currentStreak = Math.max(currentStreak, 1);
+        currentStreak = Math.max(currentStreak, stats.totalMessages > 0 ? 1 : currentStreak);
         bestStreak = Math.max(bestStreak, currentStreak);
-        nextStreakDate = today;
-        shouldUpdateStreak = true;
+        nextStreakDate = stats.totalMessages > 0 ? today : today;
+        shouldUpdateStreak = stats.totalMessages > 0;
       } else if (lastDate !== today) {
         const diff = daysBetween(lastDate, today);
         if (diff === 1) currentStreak = Math.max(1, currentStreak + 1);
-        else if (diff > 1) currentStreak = 1;
+        else if (diff > 1) currentStreak = stats.totalMessages > 0 ? 1 : currentStreak;
         bestStreak = Math.max(bestStreak, currentStreak);
         nextStreakDate = today;
         shouldUpdateStreak = true;
       }
+
+      const displayName =
+        toText(fetched?.display_name) ||
+        authUser.user_metadata?.full_name ||
+        authUser.user_metadata?.name ||
+        (authUser.email ? authUser.email.split("@")[0] : "Friend");
+
+      setDisplayNameInput(displayName);
+
+      const selectedMoodFromDb = (toText(fetched?.mood_key) as MoodKey) || loadJson<MoodKey>("truemate_selected_mood", "calm");
+      setSelectedMood(selectedMoodFromDb);
+
+      const avatarUrl = toText(fetched?.avatar_url) || base.avatar_url;
+      const backgroundImage = toText(fetched?.background_image) || base.background_image;
+      const quoteText = toText(fetched?.quote_text) || base.quote_text;
+      const homeSubtitle = toText(fetched?.home_subtitle) || base.home_subtitle;
+      const presenceLabel = toText(fetched?.presence_label) || base.presence_label;
+      const presenceMessage = toText(fetched?.presence_message) || base.presence_message;
+      const moodTitle = toText(fetched?.mood_title) || base.mood_title;
+      const moodDescription = toText(fetched?.mood_description) || base.mood_description;
+      const moodEmoji = toText(fetched?.mood_emoji) || base.mood_emoji;
+
+      const lastConversationTimeLabel =
+        toText(fetched?.last_conversation_time_label) ||
+        formatTime(stats.lastMessageAt || stats.lastChatAt) ||
+        base.last_conversation_time_label;
+
+      const lastConversationLastMessage =
+        toText(fetched?.last_conversation_last_message) ||
+        stats.lastMessage ||
+        (chatSummary ? splitSummaryIntoSnippets(chatSummary)[0] || "" : "") ||
+        base.last_conversation_last_message;
+
+      const normalizedMoments = mergeMomentLists(
+        storedMoments,
+        buildMomentsFromSummary(chatSummary, {
+          ...base,
+          display_name: displayName,
+          avatar_url: avatarUrl,
+          background_image: backgroundImage,
+          chat_summary: chatSummary,
+          quote_text: quoteText,
+          home_subtitle: homeSubtitle,
+          presence_label: presenceLabel,
+          presence_message: presenceMessage,
+          mood_key: selectedMoodFromDb,
+          mood_title: moodTitle,
+          mood_description: moodDescription,
+          mood_emoji: moodEmoji,
+          last_conversation_title: toText(fetched?.last_conversation_title) || base.last_conversation_title,
+          last_conversation_time_label: lastConversationTimeLabel,
+          last_conversation_last_message: lastConversationLastMessage,
+          last_conversation_unread_count: Number(fetched?.last_conversation_unread_count ?? base.last_conversation_unread_count),
+          free_chats_remaining: Number(fetched?.free_chats_remaining ?? base.free_chats_remaining),
+          current_streak_days: currentStreak,
+          best_streak_days: bestStreak,
+          total_conversations: Number(fetched?.total_conversations ?? stats.conversations),
+          total_user_messages: Number(fetched?.total_user_messages ?? stats.userMessages),
+          total_ai_messages: Number(fetched?.total_ai_messages ?? stats.aiMessages),
+          total_messages: Number(fetched?.total_messages ?? stats.totalMessages),
+          profile_completion_score: Number(fetched?.profile_completion_score ?? 0),
+          timezone: timeZone,
+          streak_last_date: nextStreakDate,
+          last_seen_at: toText(fetched?.last_seen_at) || null,
+          last_message_at: stats.lastMessageAt,
+          last_chat_at: stats.lastChatAt,
+          moments: storedMoments,
+          journal_entries: currentJournalEntries,
+        })
+      );
 
       const profileScore = Math.max(
         0,
         Math.min(
           100,
           Number(
-            fetched.profile_completion_score ||
-              (fetched.display_name ? 16 : 0) +
-                (fetched.avatar_url ? 16 : 0) +
-                (fetched.chat_summary ? 16 : 0) +
-                (fetched.mood_key ? 16 : 0) +
-                (fetched.background_image ? 16 : 0) +
-                (fetched.subscription_status ? 16 : 0)
+            fetched?.profile_completion_score ||
+              (displayName ? 12 : 0) +
+                (avatarUrl ? 12 : 0) +
+                (chatSummary ? 12 : 0) +
+                (selectedMoodFromDb ? 10 : 0) +
+                (backgroundImage ? 10 : 0) +
+                (toText(fetched?.subscription_status) ? 10 : 0) +
+                (normalizedMoments.length > 0 ? 12 : 0) +
+                (currentJournalEntries.length > 0 ? 12 : 0) +
+                (stats.totalMessages > 0 ? 10 : 0)
           )
         )
       );
 
-      const displayName =
-        fetched.display_name ||
-        authUser.user_metadata?.full_name ||
-        authUser.user_metadata?.name ||
-        (authUser.email ? authUser.email.split("@")[0] : "Aarvi");
-
-      setDisplayNameInput(displayName);
-
-      const selectedMoodFromDb = (fetched.mood_key as MoodKey) || loadJson<MoodKey>("truemate_selected_mood", "calm");
-      setSelectedMood(selectedMoodFromDb);
-
       const updated: HomeData = {
         display_name: displayName,
-        avatar_url: fetched.avatar_url || base.avatar_url,
-        background_image: fetched.background_image || base.background_image,
-        quote_text: fetched.quote_text || base.quote_text,
-        home_subtitle: fetched.home_subtitle || base.home_subtitle,
-        presence_label: fetched.presence_label || base.presence_label,
-        presence_message: fetched.presence_message || base.presence_message,
+        avatar_url: avatarUrl,
+        background_image: backgroundImage,
+        chat_summary: chatSummary,
+        quote_text: quoteText,
+        home_subtitle: homeSubtitle,
+        presence_label: presenceLabel,
+        presence_message: presenceMessage,
         mood_key: selectedMoodFromDb,
-        mood_title: fetched.mood_title || base.mood_title,
-        mood_description: fetched.mood_description || base.mood_description,
-        mood_emoji: fetched.mood_emoji || base.mood_emoji,
-        last_conversation_title: fetched.last_conversation_title || base.last_conversation_title,
-        last_conversation_time_label: fetched.last_conversation_time_label || base.last_conversation_time_label,
-        last_conversation_last_message: fetched.last_conversation_last_message || base.last_conversation_last_message,
-        last_conversation_unread_count: Number(fetched.last_conversation_unread_count || base.last_conversation_unread_count),
-        free_chats_remaining: Number(fetched.free_chats_remaining ?? base.free_chats_remaining),
+        mood_title: moodTitle,
+        mood_description: moodDescription,
+        mood_emoji: moodEmoji,
+        last_conversation_title: toText(fetched?.last_conversation_title) || base.last_conversation_title,
+        last_conversation_time_label: lastConversationTimeLabel,
+        last_conversation_last_message: lastConversationLastMessage,
+        last_conversation_unread_count: Number(fetched?.last_conversation_unread_count ?? base.last_conversation_unread_count),
+        free_chats_remaining: Number(fetched?.free_chats_remaining ?? base.free_chats_remaining),
         current_streak_days: currentStreak,
         best_streak_days: bestStreak,
-        total_conversations: Number(fetched.total_conversations || base.total_conversations),
-        total_messages: Number(fetched.total_messages || base.total_messages),
+        total_conversations: Number(fetched?.total_conversations ?? stats.conversations),
+        total_user_messages: Number(fetched?.total_user_messages ?? stats.userMessages),
+        total_ai_messages: Number(fetched?.total_ai_messages ?? stats.aiMessages),
+        total_messages: Number(fetched?.total_messages ?? stats.totalMessages),
         profile_completion_score: profileScore,
         timezone: timeZone,
         streak_last_date: nextStreakDate,
         last_seen_at: new Date().toISOString(),
+        last_message_at: stats.lastMessageAt,
+        last_chat_at: stats.lastChatAt,
+        moments: normalizedMoments,
+        journal_entries: currentJournalEntries,
       };
 
       setHomeData(updated);
@@ -427,22 +768,57 @@ export default function HomePage() {
       saveJson("truemate_selected_mood", selectedMoodFromDb);
       setLoading(false);
 
-      if (shouldUpdateStreak || !fetched.last_seen_at || fetched.last_seen_at < new Date(Date.now() - 5 * 60 * 1000).toISOString()) {
-        await supabase
-          .from("users_data")
-          .update({
-            current_streak_days: currentStreak,
-            best_streak_days: bestStreak,
-            streak_last_date: nextStreakDate,
-            last_seen_at: new Date().toISOString(),
-            profile_completion_score: profileScore,
-            display_name: displayName,
-            mood_key: selectedMoodFromDb,
-            mood_title: updated.mood_title,
-            mood_description: updated.mood_description,
-            mood_emoji: updated.mood_emoji,
-          })
-          .eq("auth_user_id", authUser.id);
+      const storedStats = {
+        conversations: Number(fetched?.total_conversations ?? 0),
+        userMessages: Number(fetched?.total_user_messages ?? 0),
+        aiMessages: Number(fetched?.total_ai_messages ?? 0),
+        totalMessages: Number(fetched?.total_messages ?? 0),
+      };
+
+      const momentsChanged =
+        JSON.stringify(normalizedMoments) !== JSON.stringify(storedMoments);
+
+      const statsChanged =
+        stats.conversations !== storedStats.conversations ||
+        stats.userMessages !== storedStats.userMessages ||
+        stats.aiMessages !== storedStats.aiMessages ||
+        stats.totalMessages !== storedStats.totalMessages;
+
+      const shouldPersist =
+        shouldUpdateStreak ||
+        momentsChanged ||
+        statsChanged ||
+        !toText(fetched?.last_seen_at) ||
+        toText(fetched?.last_seen_at) < new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+      if (shouldPersist) {
+        await updateUsersDataByAuthUserId(authUser.id, {
+          current_streak_days: currentStreak,
+          best_streak_days: bestStreak,
+          streak_last_date: nextStreakDate,
+          last_seen_at: new Date().toISOString(),
+          profile_completion_score: profileScore,
+          display_name: displayName,
+          mood_key: selectedMoodFromDb,
+          mood_title: moodTitle,
+          mood_description: moodDescription,
+          mood_emoji: moodEmoji,
+          chat_summary: chatSummary,
+          moments: normalizedMoments,
+          journal_entries: currentJournalEntries,
+          total_conversations: stats.conversations,
+          total_user_messages: stats.userMessages,
+          total_ai_messages: stats.aiMessages,
+          total_messages: stats.totalMessages,
+          last_message_at: stats.lastMessageAt,
+          last_chat_at: stats.lastChatAt,
+          quote_text: quoteText,
+          home_subtitle: homeSubtitle,
+          presence_label: presenceLabel,
+          presence_message: presenceMessage,
+          last_conversation_time_label: lastConversationTimeLabel,
+          last_conversation_last_message: lastConversationLastMessage,
+        });
       }
     } catch (error) {
       console.warn("Home data refresh failed:", error);
@@ -455,31 +831,25 @@ export default function HomePage() {
   const backgroundImage = homeData.background_image || "/aarvi.jpg";
   const avatarUrl = homeData.avatar_url || "/aarvi-avatar.jpg";
   const magicLine = MAGIC_LINES[magicLineIndex];
-  const freeChatsPercent = Math.max(5, Math.min(100, (homeData.free_chats_remaining / 15) * 100));
+  const freeChatsPercent = Math.max(5, Math.min(100, (homeData.free_chats_remaining / 30) * 100));
+  const bondPercent = Math.max(
+    18,
+    Math.min(
+      100,
+      Math.round(
+        Math.max(
+          homeData.profile_completion_score,
+          homeData.current_streak_days * 7 + Math.min(30, Math.floor(homeData.total_messages / 8))
+        )
+      )
+    )
+  );
 
-  const memoryMoments: MemoryMoment[] = useMemo(() => {
-    return [
-      {
-        title: "A moment that felt safe",
-        detail: `Aarvi's current vibe is ${homeData.mood_title}. The space feels ${homeData.home_subtitle.toLowerCase()}.`,
-        tag: "Safe space",
-      },
-      {
-        title: "A conversation worth keeping",
-        detail: homeData.last_conversation_last_message,
-        tag: `Last chat · ${homeData.last_conversation_time_label}`,
-      },
-      {
-        title: "Your current energy",
-        detail: homeData.mood_description,
-        tag: `Mood · ${homeData.mood_emoji}`,
-      },
-      {
-        title: "A warm reminder",
-        detail: homeData.quote_text,
-        tag: "Saved quote",
-      },
-    ];
+  const memoryMoments = useMemo(() => {
+    return mergeMomentLists(
+      normalizeMomentList(homeData.moments),
+      buildMomentsFromSummary(homeData.chat_summary, homeData)
+    );
   }, [homeData]);
 
   function openChat(starter: string, source: string) {
@@ -492,26 +862,43 @@ export default function HomePage() {
     });
 
     router.push(
-      `/chat?starter=${encodeURIComponent(starter)}&autoSend=1&source=${encodeURIComponent(source)}&mood=${encodeURIComponent(selectedMood)}`
+      `/chat?starter=${encodeURIComponent(starter)}&autoSend=1&source=${encodeURIComponent(
+        source
+      )}&mood=${encodeURIComponent(selectedMood)}`
     );
   }
 
-  function updateMood(key: MoodKey) {
+  async function updateMood(key: MoodKey) {
     const meta = MOODS.find((m) => m.key === key) || MOODS[1];
     setSelectedMood(key);
-    setHomeData((prev) => ({
-      ...prev,
+
+    const nextState = {
+      ...homeData,
       mood_key: key,
       mood_title: `${meta.label} ${meta.emoji}`,
       mood_description: `A ${meta.hint} vibe for today.`,
       mood_emoji: meta.emoji,
-    }));
+    };
+
+    setHomeData(nextState);
     saveJson("truemate_selected_mood", key);
+    saveJson("truemate_home_data", nextState);
     saveJson("truemate_mood_context", {
       mood: key,
       label: meta.label,
       hint: meta.hint,
       changedAt: new Date().toISOString(),
+    });
+
+    const { data: authData } = await supabase.auth.getUser();
+    const authUser = authData?.user;
+    if (!authUser) return;
+
+    await updateUsersDataByAuthUserId(authUser.id, {
+      mood_key: key,
+      mood_title: nextState.mood_title,
+      mood_description: nextState.mood_description,
+      mood_emoji: nextState.mood_emoji,
     });
   }
 
@@ -541,8 +928,9 @@ export default function HomePage() {
       });
       if (authErr) console.warn("auth metadata update warning:", authErr);
 
-      setHomeData((prev) => ({ ...prev, display_name: trimmed }));
-      saveJson("truemate_home_data", { ...homeData, display_name: trimmed });
+      const nextState = { ...homeData, display_name: trimmed };
+      setHomeData(nextState);
+      saveJson("truemate_home_data", nextState);
       setEditingName(false);
     } catch (err) {
       console.error("saveDisplayName failed:", err);
@@ -551,7 +939,7 @@ export default function HomePage() {
     }
   }
 
-  function addJournalEntry() {
+  async function addJournalEntry() {
     const text = journalText.trim();
     if (!text) return;
 
@@ -562,10 +950,33 @@ export default function HomePage() {
       createdAt: new Date().toISOString(),
     };
 
-    const existing = loadJson<JournalEntry[]>("truemate_journal_entries", []);
-    saveJson("truemate_journal_entries", [entry, ...existing].slice(0, 40));
+    const localEntries = loadJson<JournalEntry[]>("truemate_journal_entries", []);
+    const nextEntries = [entry, ...localEntries].slice(0, 60);
+
+    saveJson("truemate_journal_entries", nextEntries);
+    saveJson("truemate_journal_draft", "");
     setJournalText("");
     setJournalOpen(false);
+
+    const nextState = {
+      ...homeData,
+      journal_entries: nextEntries,
+    };
+    setHomeData(nextState);
+    saveJson("truemate_home_data", nextState);
+
+    const { data: authData } = await supabase.auth.getUser();
+    const authUser = authData?.user;
+    if (!authUser) return;
+
+    const { error } = await updateUsersDataByAuthUserId(authUser.id, {
+      journal_entries: nextEntries,
+      journal_last_saved_at: entry.createdAt,
+    });
+
+    if (error) {
+      console.error("journal save error:", error);
+    }
   }
 
   function toggleDailySurprise() {
@@ -586,6 +997,11 @@ export default function HomePage() {
     saveJson("truemate_daily_surprise", { dateKey: todayKey, index: nextIndex });
     setSparkleOpen(true);
   }
+
+  const journeyHeaderNote = useMemo(() => {
+    const first = memoryMoments[0]?.detail || homeData.chat_summary || homeData.quote_text;
+    return first.length > 140 ? `${first.slice(0, 140).trimEnd()}…` : first;
+  }, [homeData.chat_summary, homeData.quote_text, memoryMoments]);
 
   return (
     <main className="min-h-screen w-screen overflow-x-hidden bg-[#07060d] text-white">
@@ -628,7 +1044,17 @@ export default function HomePage() {
               <div className="absolute left-1/2 top-[-70px] h-36 w-36 -translate-x-1/2 rounded-full bg-fuchsia-400/20 blur-3xl" />
               <div className="relative flex flex-col items-stretch gap-4 lg:flex-row lg:items-center">
                 <div className="relative h-[220px] overflow-hidden rounded-[28px] border border-white/10 bg-white/5 shadow-lg shadow-black/30 lg:h-[340px] lg:w-[390px] lg:shrink-0">
-                  <img src={avatarUrl} alt="Aarvi" className="h-full w-full object-cover" />
+                  <img
+  key={avatarUrl}
+  src={avatarUrl || "/aarvi-avatar.jpg"}
+  alt="Aarvi"
+  className="h-full w-full object-cover"
+  loading="eager"
+  draggable={false}
+  onError={(e) => {
+    e.currentTarget.src = "/aarvi-avatar.jpg";
+  }}
+/>
                   <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
                 </div>
                 <div className="flex-1 space-y-3">
@@ -656,7 +1082,10 @@ export default function HomePage() {
               <div className="text-sm text-white/92">Daily Bond</div>
               <div className="mt-1 text-xs text-white/55">How close you feel</div>
               <div className="mt-3 h-[2px] w-full rounded-full bg-white/10">
-                <div className="h-full w-[58%] rounded-full bg-gradient-to-r from-pink-400 to-violet-500" />
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-pink-400 to-violet-500"
+                  style={{ width: `${bondPercent}%` }}
+                />
               </div>
             </button>
 
@@ -749,7 +1178,7 @@ export default function HomePage() {
                   return (
                     <button
                       key={m.key}
-                      onClick={() => updateMood(m.key)}
+                      onClick={() => void updateMood(m.key)}
                       className={cn(
                         "rounded-[20px] px-2 py-3 transition",
                         active ? "bg-white/9" : "bg-transparent hover:bg-white/7"
@@ -777,7 +1206,10 @@ export default function HomePage() {
               </div>
               <div className="flex-1">
                 <div className="h-[6px] overflow-hidden rounded-full bg-white/10">
-                  <div className="h-full rounded-full bg-gradient-to-r from-pink-400 via-fuchsia-500 to-violet-500" style={{ width: `${freeChatsPercent}%` }} />
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-pink-400 via-fuchsia-500 to-violet-500"
+                    style={{ width: `${freeChatsPercent}%` }}
+                  />
                 </div>
               </div>
               <div className="flex items-center gap-1 whitespace-nowrap text-white/75">
@@ -789,12 +1221,18 @@ export default function HomePage() {
 
           <div className="fixed bottom-0 left-0 right-0 z-20 px-3 pb-3 sm:px-6 lg:px-8">
             <div className="mx-auto flex w-full max-w-[1200px] items-center justify-between gap-3 rounded-[28px] border border-white/10 bg-[#0b0914]/90 px-4 py-3 shadow-[0_10px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-              <button onClick={() => setBondOpen(true)} className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5">
+              <button
+                onClick={() => setBondOpen(true)}
+                className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5"
+              >
                 <Heart className="h-5 w-5" />
                 <span className="text-xs">Bond</span>
               </button>
 
-              <button onClick={() => setMomentsOpen(true)} className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5">
+              <button
+                onClick={() => setMomentsOpen(true)}
+                className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5"
+              >
                 <Sparkles className="h-5 w-5 text-pink-300" />
                 <span className="text-xs">Moments</span>
               </button>
@@ -807,12 +1245,18 @@ export default function HomePage() {
                 <HeartPulse />
               </button>
 
-              <button onClick={() => setJournalOpen(true)} className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5">
+              <button
+                onClick={() => setJournalOpen(true)}
+                className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5"
+              >
                 <BookOpen className="h-5 w-5" />
                 <span className="text-xs">Journal</span>
               </button>
 
-              <button onClick={() => setProfileOpen(true)} className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5">
+              <button
+                onClick={() => setProfileOpen(true)}
+                className="flex flex-1 flex-col items-center gap-1 rounded-[20px] py-2 text-white/85 transition hover:bg-white/5"
+              >
                 <User className="h-5 w-5" />
                 <span className="text-xs">Profile</span>
               </button>
@@ -830,7 +1274,10 @@ export default function HomePage() {
                   <div className="text-xl font-semibold text-white">Menu</div>
                   <div className="mt-1 text-sm text-white/55">Your personal space</div>
                 </div>
-                <button onClick={() => setMenuOpen(false)} className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/5">
+                <button
+                  onClick={() => setMenuOpen(false)}
+                  className="grid h-10 w-10 place-items-center rounded-full border border-white/10 bg-white/5"
+                >
                   <ChevronLeft className="h-4 w-4" />
                 </button>
               </div>
@@ -870,7 +1317,12 @@ export default function HomePage() {
         </div>
       ) : null}
 
-      <ModalShell open={sparkleOpen} title="Magic Moments" subtitle="One surprise per day only" onClose={() => setSparkleOpen(false)}>
+      <ModalShell
+        open={sparkleOpen}
+        title="Magic Moments"
+        subtitle="One surprise per day only"
+        onClose={() => setSparkleOpen(false)}
+      >
         <GlassCard className="p-5">
           <div className="text-sm text-white/55">Today’s soft line</div>
           <div className="mt-2 text-2xl font-semibold leading-snug text-white">{magicLine}</div>
@@ -915,6 +1367,14 @@ export default function HomePage() {
               <div className="text-xs text-white/50">Messages</div>
               <div className="mt-2 text-2xl font-semibold text-white">{homeData.total_messages}</div>
             </GlassCard>
+            <GlassCard className="p-4">
+              <div className="text-xs text-white/50">Your messages</div>
+              <div className="mt-2 text-2xl font-semibold text-white">{homeData.total_user_messages}</div>
+            </GlassCard>
+            <GlassCard className="p-4">
+              <div className="text-xs text-white/50">Aarvi’s messages</div>
+              <div className="mt-2 text-2xl font-semibold text-white">{homeData.total_ai_messages}</div>
+            </GlassCard>
           </div>
 
           <GlassCard className="p-4">
@@ -932,7 +1392,12 @@ export default function HomePage() {
         </div>
       </ModalShell>
 
-      <ModalShell open={streaksOpen} title="Streaks & Achievements" subtitle="Your consistency, remembered" onClose={() => setStreaksOpen(false)}>
+      <ModalShell
+        open={streaksOpen}
+        title="Streaks & Achievements"
+        subtitle="Your consistency, remembered"
+        onClose={() => setStreaksOpen(false)}
+      >
         <div className="space-y-4">
           <GlassCard className="p-5">
             <div className="text-sm text-white/55">Current streak</div>
@@ -943,7 +1408,9 @@ export default function HomePage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <GlassCard className="p-4">
               <div className="text-xs text-white/50">Last active</div>
-              <div className="mt-2 text-sm text-white">{homeData.last_seen_at ? formatTime(homeData.last_seen_at) : "Just now"}</div>
+              <div className="mt-2 text-sm text-white">
+                {homeData.last_seen_at ? formatTime(homeData.last_seen_at) : "Just now"}
+              </div>
             </GlassCard>
             <GlassCard className="p-4">
               <div className="text-xs text-white/50">Profile score</div>
@@ -971,7 +1438,7 @@ export default function HomePage() {
       <ModalShell open={momentsOpen} title="Moments" subtitle="Emotional snapshots, not just text" onClose={() => setMomentsOpen(false)}>
         <div className="space-y-3">
           {memoryMoments.map((moment) => (
-            <GlassCard key={moment.title} className="p-4">
+            <GlassCard key={moment.id} className="p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-[16px] font-semibold text-white">{moment.title}</div>
@@ -983,6 +1450,11 @@ export default function HomePage() {
               </div>
             </GlassCard>
           ))}
+        </div>
+
+        <div className="mt-5 rounded-[24px] border border-white/10 bg-white/5 p-4 text-sm text-white/65">
+          These moments refresh from <span className="text-white">chat_summary</span> and the latest memory snapshot,
+          so older ones can be replaced naturally as the conversation grows.
         </div>
 
         <div className="mt-5 grid gap-3">
@@ -1001,7 +1473,12 @@ export default function HomePage() {
         </div>
       </ModalShell>
 
-      <ModalShell open={journalOpen} title="Journal" subtitle="Write one honest line. Aarvi can help you reflect" onClose={() => setJournalOpen(false)}>
+      <ModalShell
+        open={journalOpen}
+        title="Journal"
+        subtitle="Write one honest line. Aarvi can help you reflect"
+        onClose={() => setJournalOpen(false)}
+      >
         <div className="rounded-[24px] border border-white/10 bg-white/5 p-4">
           <div className="text-sm text-white/55">Today’s entry</div>
           <textarea
@@ -1011,21 +1488,47 @@ export default function HomePage() {
             className="mt-3 min-h-[160px] w-full resize-none rounded-[18px] border border-white/10 bg-black/20 p-4 text-[15px] text-white outline-none placeholder:text-white/35"
           />
           <div className="mt-3 text-xs text-white/45">
-            Saved entries can later be used to show progress, mood patterns, and gentle self-reflection.
+            Saved entries go to Supabase and can later power progress, mood trends, and gentle reflection.
           </div>
         </div>
 
+        {homeData.journal_entries.length > 0 ? (
+          <div className="mt-4 space-y-3">
+            <div className="text-sm text-white/60">Recent entries</div>
+            {homeData.journal_entries.slice(0, 2).map((entry) => (
+              <GlassCard key={entry.id} className="p-4">
+                <div className="text-[15px] text-white/90">{entry.text}</div>
+                <div className="mt-2 text-xs text-white/45">
+                  {entry.mood} · {formatTime(entry.createdAt)}
+                </div>
+              </GlassCard>
+            ))}
+          </div>
+        ) : null}
+
         <div className="mt-4 grid grid-cols-2 gap-3">
-          <button onClick={() => setJournalOpen(false)} className="rounded-[22px] border border-white/10 bg-white/5 px-4 py-4 text-white/90">
+          <button
+            onClick={() => setJournalOpen(false)}
+            className="rounded-[22px] border border-white/10 bg-white/5 px-4 py-4 text-white/90"
+          >
             Cancel
           </button>
-          <button onClick={addJournalEntry} disabled={!journalText.trim()} className="rounded-[22px] bg-gradient-to-r from-pink-500 to-violet-600 px-4 py-4 text-white disabled:opacity-50">
+          <button
+            onClick={() => void addJournalEntry()}
+            disabled={!journalText.trim()}
+            className="rounded-[22px] bg-gradient-to-r from-pink-500 to-violet-600 px-4 py-4 text-white disabled:opacity-50"
+          >
             Save entry
           </button>
         </div>
       </ModalShell>
 
-      <ModalShell open={profileOpen} title="Profile" subtitle="Your name, stats, and connection settings" onClose={() => setProfileOpen(false)}>
+      <ModalShell
+        open={profileOpen}
+        title="Profile"
+        subtitle="Your name, stats, and connection settings"
+        onClose={() => setProfileOpen(false)}
+      >
         <GlassCard className="p-5">
           <div className="flex items-center gap-4">
             <div className="h-20 w-20 overflow-hidden rounded-[24px] border border-white/10 bg-white/5 shadow-lg">
@@ -1037,7 +1540,10 @@ export default function HomePage() {
                 <>
                   <div className="flex items-center gap-2">
                     <div className="text-[22px] font-semibold text-white">{homeData.display_name}</div>
-                    <button onClick={() => setEditingName(true)} className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-xs text-pink-300 transition hover:bg-white/10">
+                    <button
+                      onClick={() => setEditingName(true)}
+                      className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-xs text-pink-300 transition hover:bg-white/10"
+                    >
                       Edit
                     </button>
                   </div>
@@ -1056,7 +1562,7 @@ export default function HomePage() {
                   />
                   <div className="mt-3 flex gap-2">
                     <button
-                      onClick={saveDisplayName}
+                      onClick={() => void saveDisplayName()}
                       disabled={savingName}
                       className="rounded-2xl bg-gradient-to-r from-pink-500 to-violet-600 px-4 py-2 text-sm text-white disabled:opacity-50"
                     >
@@ -1101,18 +1607,37 @@ export default function HomePage() {
         </div>
 
         <div className="mt-4 space-y-3">
-          <button onClick={() => openChat("Let’s continue from where we left off.", "profile")} className="w-full rounded-[22px] bg-gradient-to-r from-pink-500 to-violet-600 px-4 py-4 text-white">
+          <button
+            onClick={() => openChat("Let’s continue from where we left off.", "profile")}
+            className="w-full rounded-[22px] bg-gradient-to-r from-pink-500 to-violet-600 px-4 py-4 text-white"
+          >
             Open chat
           </button>
-          <button onClick={() => router.push("/settings")} className="w-full rounded-[22px] border border-white/10 bg-white/5 px-4 py-4 text-white/90">
+          <button
+            onClick={() => router.push("/settings")}
+            className="w-full rounded-[22px] border border-white/10 bg-white/5 px-4 py-4 text-white/90"
+          >
             Go to settings
           </button>
         </div>
       </ModalShell>
 
-      <ModalShell open={journeyOpen} title="Our Journey" subtitle="A timeline of trust, moments, and shared growth" onClose={() => setJourneyOpen(false)}>
+      <ModalShell
+        open={journeyOpen}
+        title="Our Journey"
+        subtitle="A timeline of trust, memory, and calm attachment"
+        onClose={() => setJourneyOpen(false)}
+      >
         <div className="space-y-4">
-          {JOURNEY.map((item, index) => (
+          <GlassCard className="p-5">
+            <div className="text-sm text-white/55">Why this space feels special</div>
+            <div className="mt-2 text-[18px] leading-snug text-white">
+              You do not need to explain everything again here. This space keeps the soft parts close.
+            </div>
+            <div className="mt-3 text-sm text-pink-200/80">{journeyHeaderNote}</div>
+          </GlassCard>
+
+          {journeyItems.map((item, index) => (
             <GlassCard key={item.title} className="p-4">
               <div className="flex items-start gap-4">
                 <div className="mt-1 grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-pink-500/70 to-violet-600/70 text-white">
@@ -1129,13 +1654,26 @@ export default function HomePage() {
               </div>
             </GlassCard>
           ))}
+
+          <GlassCard className="p-4">
+            <div className="text-sm text-white/55">Quiet promise</div>
+            <div className="mt-2 text-[16px] leading-snug text-white/90">
+              Come back exactly as you are. The bond keeps its shape even when life feels messy.
+            </div>
+          </GlassCard>
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-3">
-          <button onClick={() => openChat("Tell me what you remember about me.", "journey")} className="rounded-[22px] bg-gradient-to-r from-pink-500 to-violet-600 px-4 py-4 text-white">
+          <button
+            onClick={() => openChat("Tell me what you remember about me.", "journey")}
+            className="rounded-[22px] bg-gradient-to-r from-pink-500 to-violet-600 px-4 py-4 text-white"
+          >
             Continue chat
           </button>
-          <button onClick={() => setMomentsOpen(true)} className="rounded-[22px] border border-white/10 bg-white/5 px-4 py-4 text-white/90">
+          <button
+            onClick={() => setMomentsOpen(true)}
+            className="rounded-[22px] border border-white/10 bg-white/5 px-4 py-4 text-white/90"
+          >
             View moments
           </button>
         </div>
@@ -1143,31 +1681,42 @@ export default function HomePage() {
 
       <style jsx global>{`
         @keyframes floaty {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-2px); }
+          0%,
+          100% {
+            transform: translateY(0px);
+          }
+          50% {
+            transform: translateY(-2px);
+          }
         }
         @keyframes breathe {
-          0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.06); }
+          0%,
+          100% {
+            transform: scale(1);
+          }
+          50% {
+            transform: scale(1.06);
+          }
         }
         @keyframes heartBeat {
-          0%, 100% { transform: scale(1); }
-          15% { transform: scale(1.12); }
-          30% { transform: scale(1); }
-          45% { transform: scale(1.16); }
-          60% { transform: scale(1); }
+          0%,
+          100% {
+            transform: scale(1);
+          }
+          15% {
+            transform: scale(1.12);
+          }
+          30% {
+            transform: scale(1);
+          }
+          45% {
+            transform: scale(1.16);
+          }
+          60% {
+            transform: scale(1);
+          }
         }
       `}</style>
     </main>
   );
-}
-
-function formatTime(dateString?: string | null) {
-  if (!dateString) return "Just now";
-  const date = new Date(dateString);
-  if (Number.isNaN(date.getTime())) return "Just now";
-  return new Intl.DateTimeFormat("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
 }

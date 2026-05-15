@@ -56,6 +56,14 @@ type AttachmentSnapshot = {
   dataUrl?: string | null;
 };
 
+type StoredChatItem = {
+  role: ChatMsg["role"];
+  content: string;
+  createdAt?: string;
+  timestamp?: string;
+  [key: string]: unknown;
+};
+
 const TEXT_MODEL = "llama-3.3-70b-versatile";
 const VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 
@@ -294,23 +302,138 @@ function formatTimeContext(timeZone = "Asia/Kolkata"): TimeContext {
   };
 }
 
+function normalizeStoredChat(entries: unknown): StoredChatItem[] {
+  if (!Array.isArray(entries)) return [];
+
+  return entries
+    .map((item) => {
+      const raw = (item ?? {}) as Record<string, unknown>;
+      const roleRaw = safeString(raw.role).toLowerCase();
+      const role: ChatMsg["role"] =
+        roleRaw === "assistant" || roleRaw === "system" || roleRaw === "user" ? roleRaw : "user";
+      const content = safeString(raw.content ?? raw.text ?? raw.message ?? raw.body);
+      if (!content) return null;
+
+      return {
+        ...raw,
+        role,
+        content,
+      } as StoredChatItem;
+    })
+    .filter((item): item is StoredChatItem => Boolean(item));
+}
+
 function buildRecentConversationMessages(fetchedChat: any): ChatMsg[] {
-  if (!Array.isArray(fetchedChat) || fetchedChat.length === 0) return [];
+  const normalized = normalizeStoredChat(fetchedChat);
+  if (!normalized.length) return [];
 
-  const lastMessages = fetchedChat.slice(-10);
-  const msgs: ChatMsg[] = [];
-
-  for (const m of lastMessages) {
-    const roleRaw = safeString(m?.role).toLowerCase();
-    const content = safeString(m?.content).replace(/\s+/g, " ");
-    if (!content) continue;
-
+  return normalized.slice(-10).flatMap((m) => {
+    const roleRaw = safeString(m.role).toLowerCase();
+    const content = safeString(m.content).replace(/\s+/g, " ");
+    if (!content) return [];
     if (roleRaw === "user" || roleRaw === "assistant") {
-      msgs.push({ role: roleRaw, content });
+      return [{ role: roleRaw, content } as ChatMsg];
     }
+    return [];
+  });
+}
+
+function buildConversationPatch(params: {
+  existingRow: Record<string, unknown> | null | undefined;
+  userMessage: string;
+  assistantMessage: string;
+  timeContext: TimeContext;
+  chatSummary: string;
+  aiSummary?: string[];
+}) {
+  const existingChat = normalizeStoredChat(params.existingRow?.chat);
+  const now = new Date().toISOString();
+
+  const existingConversations = Number(params.existingRow?.total_conversations);
+  const existingUserMessages = Number(params.existingRow?.total_user_messages);
+  const existingAiMessages = Number(params.existingRow?.total_ai_messages);
+  const existingTotalMessages = Number(params.existingRow?.total_messages);
+
+  const fallbackConversations = existingChat.filter((msg) => msg.role === "user").length;
+  const fallbackUserMessages = existingChat.filter((msg) => msg.role === "user").length;
+  const fallbackAiMessages = existingChat.filter((msg) => msg.role === "assistant").length;
+  const fallbackTotalMessages = existingChat.length;
+
+  const baseConversations =
+    Number.isFinite(existingConversations) && existingConversations > 0
+      ? existingConversations
+      : fallbackConversations;
+
+  const baseUserMessages =
+    Number.isFinite(existingUserMessages) && existingUserMessages > 0
+      ? existingUserMessages
+      : fallbackUserMessages;
+
+  const baseAiMessages =
+    Number.isFinite(existingAiMessages) && existingAiMessages > 0
+      ? existingAiMessages
+      : fallbackAiMessages;
+
+  const baseTotalMessages =
+    Number.isFinite(existingTotalMessages) && existingTotalMessages > 0
+      ? existingTotalMessages
+      : fallbackTotalMessages;
+
+  const nextChat = [
+    ...existingChat,
+    { role: "user", content: params.userMessage, createdAt: now, timestamp: now },
+    { role: "assistant", content: params.assistantMessage, createdAt: now, timestamp: now },
+  ];
+
+  const patch: Record<string, unknown> = {
+    chat: nextChat,
+    total_conversations: Math.max(0, baseConversations) + 1,
+    total_user_messages: Math.max(0, baseUserMessages) + 1,
+    total_ai_messages: Math.max(0, baseAiMessages) + 1,
+    total_messages: Math.max(0, baseTotalMessages) + 2,
+    last_message_at: now,
+    last_chat_at: now,
+    last_seen_at: now,
+    last_conversation_last_message: params.assistantMessage,
+    last_conversation_time_label: params.timeContext.time,
+    chat_summary: params.chatSummary,
+    updated_at: now,
+  };
+
+  if (params.aiSummary) {
+    patch.ai_summary = params.aiSummary;
   }
 
-  return msgs;
+  return patch;
+}
+
+async function persistConversationPatch(params: {
+  existingRow: Record<string, unknown> | null | undefined;
+  email: string;
+  authUserId: string;
+  patch: Record<string, unknown>;
+}) {
+  const { existingRow, email, authUserId, patch } = params;
+
+  if (existingRow) {
+    const selectorKey: "auth_user_id" | "email" = authUserId ? "auth_user_id" : "email";
+    const selectorVal = authUserId || email;
+
+    return supabaseServer
+      .from("users_data")
+      .update({
+        ...patch,
+        updated_at: new Date().toISOString(),
+      })
+      .eq(selectorKey, selectorVal);
+  }
+
+  return supabaseServer.from("users_data").insert({
+    email,
+    auth_user_id: authUserId || null,
+    ...patch,
+    updated_at: new Date().toISOString(),
+  });
 }
 
 function detectReminderMath(message: string, timeContext: TimeContext) {
@@ -1176,7 +1299,7 @@ export async function POST(req: Request) {
         const selector = email ? { col: "email", val: email } : { col: "id", val: userId };
         const { data: row, error } = await supabaseServer
           .from("users_data")
-          .select("chat, ai_summary, chat_summary")
+          .select("*")
           .eq(selector.col, selector.val)
           .maybeSingle();
 
@@ -1261,6 +1384,34 @@ export async function POST(req: Request) {
 
     if (isNewUserOnboardingNeeded) {
       const hiddenMeta = [buildMetaEntry(META_ONBOARDING_SENT, "1"), buildMetaEntry(META_DAILY_SURPRISE_SENT, todayKey)];
+      const nextAiSummary = ensureUniqueStrings([...existingAiSummaryAll, ...hiddenMeta], 25);
+
+      if (!guestMode && (email || userId)) {
+        const onboardingPatch = buildConversationPatch({
+          existingRow: fetchedRow,
+          userMessage: message,
+          assistantMessage: ONBOARDING_REPLY,
+          timeContext,
+          chatSummary: longTermSummary,
+          aiSummary: nextAiSummary,
+        });
+
+        try {
+          const { error: updateErr } = await persistConversationPatch({
+            existingRow: fetchedRow,
+            email,
+            authUserId: userId,
+            patch: onboardingPatch,
+          });
+
+          if (updateErr) {
+            console.warn("Failed to persist onboarding state:", updateErr);
+          }
+        } catch (e) {
+          console.warn("Onboarding persistence failed:", e);
+        }
+      }
+
       const res = NextResponse.json({
         reply: ONBOARDING_REPLY,
         guestMode,
@@ -1274,22 +1425,6 @@ export async function POST(req: Request) {
       });
 
       res.headers.set("Cache-Control", "no-store");
-
-      try {
-        const selector = email ? { col: "email", val: email } : { col: "id", val: userId };
-        const existingAll = ensureUniqueStrings([...existingAiSummaryAll, ...hiddenMeta], 25);
-        const { error: updateErr } = await supabaseServer
-          .from("users_data")
-          .update({ ai_summary: existingAll, updated_at: new Date().toISOString() })
-          .eq(selector.col, selector.val);
-
-        if (updateErr) {
-          console.warn("Failed to persist onboarding meta:", updateErr);
-        }
-      } catch (e) {
-        console.warn("Onboarding meta update failed:", e);
-      }
-
       return res;
     }
 
@@ -1298,9 +1433,6 @@ export async function POST(req: Request) {
       modelMessages.push(m);
     }
 
-    // IMPORTANT:
-    // User's typed message and attachment context are both passed together here,
-    // so Aarvi can answer the query and also use the uploaded file/image context.
     modelMessages.push({
       role: "user",
       content: buildModelUserMessage(message, attachmentContext),
@@ -1410,19 +1542,30 @@ export async function POST(req: Request) {
 
       const mergedAll = ensureUniqueStrings([...mergedVisible, ...preservedMeta, ...nextMeta], 35);
 
+      const conversationPatch = buildConversationPatch({
+        existingRow: fetchedRow,
+        userMessage: message,
+        assistantMessage: assistantContent,
+        timeContext,
+        chatSummary: longTermSummary,
+        aiSummary: mergedAll,
+      });
+
       try {
-        const { error: updateErr } = await supabaseServer
-          .from("users_data")
-          .update({ ai_summary: mergedAll, updated_at: new Date().toISOString() })
-          .eq(selector.col, selector.val);
+        const { error: updateErr } = await persistConversationPatch({
+          existingRow: fetchedRow,
+          email,
+          authUserId: userId,
+          patch: conversationPatch,
+        });
 
         if (updateErr) {
-          console.warn("Failed to update ai_summary:", updateErr);
+          console.warn("Failed to update ai_summary / chat counters:", updateErr);
         } else {
-          console.log("ai_summary updated for", selector);
+          console.log("Conversation + counts updated for", selector);
         }
       } catch (e) {
-        console.error("Error updating ai_summary:", e);
+        console.error("Error updating conversation state:", e);
       }
     }
 
