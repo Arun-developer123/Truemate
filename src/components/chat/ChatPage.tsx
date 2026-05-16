@@ -329,7 +329,7 @@ export default function ChatPage(): React.JSX.Element {
         }}
       />
 
-      <div className="relative z-10 flex h-full flex-col px-4 pt-4 pb-4 sm:px-6">
+      <div className="relative z-10 flex h-full min-w-0 flex-col overflow-hidden px-3 pt-4 pb-4 sm:px-6">
         <header className="relative z-[120] mb-4 flex items-start justify-between">
           <button
             onClick={() => router.back()}
@@ -347,7 +347,7 @@ export default function ChatPage(): React.JSX.Element {
             </svg>
           </button>
 
-          <div className="flex min-w-0 flex-1 items-center gap-3 px-3">
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-2 overflow-hidden">
             <div className="relative shrink-0">
               <div className="absolute -inset-2 rounded-full bg-gradient-to-br from-pink-500 via-fuchsia-500 to-purple-500 blur-[10px] opacity-50 animate-pulse" />
               <div className="absolute -inset-1 rounded-full border border-pink-300/50 animate-glowSpin" />
@@ -361,7 +361,7 @@ export default function ChatPage(): React.JSX.Element {
 
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="truncate text-[28px] font-semibold leading-none tracking-tight text-white">
+                <h1 className="truncate text-[22px] sm:text-[28px] font-semibold leading-none tracking-tight text-white">
                   Aarvi <span className="text-pink-300">✿</span>
                 </h1>
               </div>
@@ -489,7 +489,7 @@ export default function ChatPage(): React.JSX.Element {
         {showUpgradeBanner && (
           <div className="mb-4 rounded-[28px] border border-fuchsia-400/35 bg-white/7 px-4 py-4 shadow-[0_12px_40px_rgba(0,0,0,0.28)] backdrop-blur-2xl">
             <div className="flex items-center gap-4">
-              <div className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-fuchsia-500/30 to-pink-500/15 ring-1 ring-white/10">
+              <div className="grid h-12 w-12 sm:h-14 sm:w-14 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-fuchsia-500/30 to-pink-500/15 ring-1 ring-white/10">
                 <div className="text-3xl">💎</div>
               </div>
 
@@ -547,7 +547,7 @@ export default function ChatPage(): React.JSX.Element {
                       data-role={msg.role}
                       data-source={msg.source || ""}
                     >
-                      <div className="relative max-w-[78%]">
+                      <div className="relative max-w-[84%] sm:max-w-[78%] min-w-0">
                         <div
                           className={`relative rounded-[26px] px-5 py-4 shadow-[0_12px_30px_rgba(0,0,0,0.22)] backdrop-blur-2xl ${
                             isUser
@@ -646,7 +646,7 @@ export default function ChatPage(): React.JSX.Element {
               </div>
             )}
 
-            <div className="relative mt-4 flex items-end gap-3">
+            <div className="relative mt-4 flex min-w-0 items-end gap-2">
               <div className="relative">
                 <button
                   ref={attachBtnRef}
@@ -690,12 +690,12 @@ export default function ChatPage(): React.JSX.Element {
                 />
               </div>
 
-              <div className="relative flex h-16 flex-1 items-center rounded-full border border-white/10 bg-black/22 px-5 shadow-[0_12px_30px_rgba(0,0,0,0.18)] backdrop-blur-2xl">
+              <div className="relative flex h-16 min-w-0 flex-1 items-center rounded-full border border-white/10 bg-black/22 px-4 shadow-[0_12px_30px_rgba(0,0,0,0.18)] backdrop-blur-2xl">
                 <input
                   value={chat.input}
                   onChange={(e) => chat.setInput(e.target.value)}
                   placeholder="Type your message..."
-                  className="h-full flex-1 bg-transparent text-[16px] text-white outline-none placeholder:text-white/45"
+                  className="h-full min-w-0 flex-1 bg-transparent text-[15px] sm:text-[16px] text-white outline-none placeholder:text-white/45"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
@@ -741,7 +741,7 @@ export default function ChatPage(): React.JSX.Element {
               <button
                 type="button"
                 onClick={chat.toggleVoiceInput}
-                className={`grid h-14 w-14 shrink-0 place-items-center rounded-full border border-white/12 bg-black/22 text-white/85 shadow-[0_10px_26px_rgba(0,0,0,0.2)] backdrop-blur-2xl transition hover:scale-105 ${
+                className={`grid h-12 w-12 sm:h-14 sm:w-14 shrink-0 place-items-center rounded-full border border-white/12 bg-black/22 text-white/85 shadow-[0_10px_26px_rgba(0,0,0,0.2)] backdrop-blur-2xl transition hover:scale-105 ${
                   chat.isListening ? "ring-2 ring-pink-400/70" : ""
                 } ${!canUseMic ? "opacity-60" : ""}`}
                 aria-label="Voice"
@@ -755,7 +755,7 @@ export default function ChatPage(): React.JSX.Element {
                 type="button"
                 onClick={handleSend}
                 disabled={chat.sending || (chat.isGuestMode && chat.guestLimitReached)}
-                className={`grid h-14 w-14 shrink-0 place-items-center rounded-full text-white shadow-[0_12px_30px_rgba(168,85,247,0.35)] transition hover:scale-105 active:scale-[0.98] ${
+                className={`grid h-12 w-12 sm:h-14 sm:w-14 shrink-0 place-items-center rounded-full text-white shadow-[0_12px_30px_rgba(168,85,247,0.35)] transition hover:scale-105 active:scale-[0.98] ${
                   chat.sending || (chat.isGuestMode && chat.guestLimitReached)
                     ? "cursor-not-allowed bg-violet-400/60"
                     : "bg-gradient-to-br from-pink-500 via-fuchsia-500 to-violet-600"

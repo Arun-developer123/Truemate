@@ -3,6 +3,9 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Analytics } from "@vercel/analytics/react";
+import { AudioProvider } from "@/components/audio/AudioProvider";
+import { AmbientPlayer } from "@/components/audio/AmbientPlayer";
+import { HeadphoneIntro } from "@/components/audio/HeadphoneIntro";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,8 +21,6 @@ export const metadata: Metadata = {
   title: "Truemate — Your personal companion",
   description: "Truemate — chat, play, and cherish moments with your AI companion.",
   themeColor: "#7c3aed",
-
-  // 🔒 SEO protection for app subdomain
   robots: {
     index: false,
     follow: false,
@@ -34,25 +35,29 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        {/* PWA: manifest + icons */}
         <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#7c3aed" />
         <link rel="icon" href="/icon-192.png" />
         <link rel="apple-touch-icon" href="/icon-192.png" />
-        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta
+          name="apple-mobile-web-app-capable"
+          content="yes"
+        />
         <meta
           name="apple-mobile-web-app-status-bar-style"
           content="black-translucent"
         />
-
-        {/* Viewport */}
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </head>
 
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-slate-900`}
       >
-        {children}
+        <AudioProvider>
+          <AmbientPlayer />
+          {children}
+          <HeadphoneIntro />
+        </AudioProvider>
         <Analytics />
       </body>
     </html>

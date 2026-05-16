@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { SoundToggle } from "@/components/audio/SoundToggle";
 
 type MoodKey = "happy" | "calm" | "tired" | "stressed" | "lonely";
 
@@ -1022,13 +1023,16 @@ export default function HomePage() {
               <Menu className="h-5 w-5" />
             </button>
 
-            <button
-              onClick={toggleDailySurprise}
-              className="grid h-12 w-12 place-items-center rounded-full border border-pink-300/30 bg-black/20 text-pink-100 shadow-lg shadow-pink-500/10 backdrop-blur-xl transition hover:scale-[1.02] hover:bg-white/10"
-              aria-label="Open magic moments"
-            >
-              <Sparkles className="h-5 w-5" />
-            </button>
+            <div className="flex items-center gap-2">
+  <SoundToggle />
+  <button
+    onClick={toggleDailySurprise}
+    className="grid h-12 w-12 place-items-center rounded-full border border-pink-300/30 bg-black/20 text-pink-100 shadow-lg shadow-pink-500/10 backdrop-blur-xl transition hover:scale-[1.02] hover:bg-white/10"
+    aria-label="Open magic moments"
+  >
+    <Sparkles className="h-5 w-5" />
+  </button>
+</div>
           </header>
 
           <div className="px-2 pt-6 text-center sm:px-6">

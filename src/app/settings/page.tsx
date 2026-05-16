@@ -155,7 +155,7 @@ export default function SettingsPage() {
       const authUser = authData?.user;
 
       if (!authUser) {
-        router.replace("/sign-in");
+        router.replace("/signin");
         return;
       }
 
@@ -232,7 +232,7 @@ export default function SettingsPage() {
       const authUser = authData?.user;
 
       if (!authUser) {
-        router.replace("/auth/sign-in");
+        router.replace("/signin");
         return;
       }
 
@@ -314,7 +314,7 @@ export default function SettingsPage() {
 
   async function handleLogout() {
     await supabase.auth.signOut();
-    router.replace("/auth/sign-in");
+    router.replace("/signin");
   }
 
   function resetToDefault() {
