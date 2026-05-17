@@ -12,7 +12,7 @@ export function AmbientPlayer() {
 
     audio.preload = "auto";
     audio.loop = true;
-    audio.volume = 0.16;
+    audio.volume = 0.05;
   }, [audioRef]);
 
   return (

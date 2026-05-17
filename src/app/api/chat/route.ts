@@ -71,27 +71,21 @@ const GUEST_MESSAGES_LIMIT = 10;
 const GUEST_COOKIE_NAME = "truemate_guest";
 const GUEST_COUNT_COOKIE = "truemate_guest_messages";
 const GUEST_LIMIT_COOKIE = "truemate_guest_limit_reached";
-const GUEST_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
+const GUEST_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 
 const META_PREFIX = "__truemate_meta__:";
 const META_ONBOARDING_SENT = "onboarding_intro_sent";
 const META_DAILY_SURPRISE_SENT = "daily_surprise_sent";
+
+const RECENT_MESSAGES_LIMIT = 8;
+const MAX_MEMORY_LINES = 18;
+const MAX_MEMORY_CHARS = 1800;
 
 const ONBOARDING_REPLY =
   "Hi, I’m Aarvi ✨\n\nI want to get to know the real you, not just your name. Tell me your name, and then send me 3 tiny things that feel like *you* — your favorite food, something you can talk about forever, and one little habit nobody notices at first glance.";
 
 function safeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeGender(value: unknown): UserIdentity["gender"] {
-  const raw = safeString(value).toLowerCase();
-  if (!raw) return "unknown";
-
-  if (["male", "m", "boy", "man", "guy"].includes(raw)) return "male";
-  if (["female", "f", "girl", "woman"].includes(raw)) return "female";
-  if (["non-binary", "nonbinary", "nb", "other"].includes(raw)) return "non-binary";
-  return "unknown";
 }
 
 function cleanNameCandidate(value: string) {
@@ -130,24 +124,25 @@ function cleanNameCandidate(value: string) {
   const firstToken = name.split(" ")[0].toLowerCase();
   if (stopWords.has(firstToken)) return "";
   if (name.length < 2 || name.length > 40) return "";
-
   return name;
+}
+
+function normalizeGender(value: unknown): UserIdentity["gender"] {
+  const raw = safeString(value).toLowerCase();
+  if (!raw) return "unknown";
+  if (["male", "m", "boy", "man", "guy"].includes(raw)) return "male";
+  if (["female", "f", "girl", "woman"].includes(raw)) return "female";
+  if (["non-binary", "nonbinary", "nb", "other"].includes(raw)) return "non-binary";
+  return "unknown";
 }
 
 function getCookieValue(req: Request, name: string) {
   const cookieHeader = req.headers.get("cookie") || "";
-  const cookies = cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean);
-
+  const cookies = cookieHeader.split(";").map((part) => part.trim()).filter(Boolean);
   for (const cookie of cookies) {
     const [key, ...rest] = cookie.split("=");
-    if (key === name) {
-      return decodeURIComponent(rest.join("=") || "");
-    }
+    if (key === name) return decodeURIComponent(rest.join("=") || "");
   }
-
   return "";
 }
 
@@ -185,8 +180,7 @@ function getMetaValue(entries: unknown, key: string) {
   if (!Array.isArray(entries)) return "";
   const prefix = `${META_PREFIX}${key}=`;
   const match = entries.find((item) => safeString(item).startsWith(prefix));
-  if (!match) return "";
-  return safeString(match).slice(prefix.length);
+  return match ? safeString(match).slice(prefix.length) : "";
 }
 
 function getVisibleAiSummary(entries: unknown) {
@@ -211,6 +205,12 @@ function ensureUniqueStrings(values: string[], limit = 25) {
   return out;
 }
 
+function truncateText(value: string, maxChars: number) {
+  const text = safeString(value);
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars).trim()}…`;
+}
+
 function getDateKeyInTimeZone(timeZone: string) {
   const now = new Date();
   return new Intl.DateTimeFormat("en-CA", {
@@ -231,9 +231,7 @@ async function getAuthenticatedUser(req: Request) {
 
   try {
     const { data, error } = await supabaseServer.auth.getUser();
-    if (!error && data?.user) {
-      return data.user;
-    }
+    if (!error && data?.user) return data.user;
     console.warn("supabaseServer.auth.getUser() failed:", error);
   } catch (err) {
     console.warn("Fallback auth check failed:", err);
@@ -313,12 +311,7 @@ function normalizeStoredChat(entries: unknown): StoredChatItem[] {
         roleRaw === "assistant" || roleRaw === "system" || roleRaw === "user" ? roleRaw : "user";
       const content = safeString(raw.content ?? raw.text ?? raw.message ?? raw.body);
       if (!content) return null;
-
-      return {
-        ...raw,
-        role,
-        content,
-      } as StoredChatItem;
+      return { ...raw, role, content } as StoredChatItem;
     })
     .filter((item): item is StoredChatItem => Boolean(item));
 }
@@ -327,13 +320,11 @@ function buildRecentConversationMessages(fetchedChat: any): ChatMsg[] {
   const normalized = normalizeStoredChat(fetchedChat);
   if (!normalized.length) return [];
 
-  return normalized.slice(-10).flatMap((m) => {
+  return normalized.slice(-RECENT_MESSAGES_LIMIT).flatMap((m) => {
     const roleRaw = safeString(m.role).toLowerCase();
     const content = safeString(m.content).replace(/\s+/g, " ");
     if (!content) return [];
-    if (roleRaw === "user" || roleRaw === "assistant") {
-      return [{ role: roleRaw, content } as ChatMsg];
-    }
+    if (roleRaw === "user" || roleRaw === "assistant") return [{ role: roleRaw, content } as ChatMsg];
     return [];
   });
 }
@@ -359,25 +350,10 @@ function buildConversationPatch(params: {
   const fallbackAiMessages = existingChat.filter((msg) => msg.role === "assistant").length;
   const fallbackTotalMessages = existingChat.length;
 
-  const baseConversations =
-    Number.isFinite(existingConversations) && existingConversations > 0
-      ? existingConversations
-      : fallbackConversations;
-
-  const baseUserMessages =
-    Number.isFinite(existingUserMessages) && existingUserMessages > 0
-      ? existingUserMessages
-      : fallbackUserMessages;
-
-  const baseAiMessages =
-    Number.isFinite(existingAiMessages) && existingAiMessages > 0
-      ? existingAiMessages
-      : fallbackAiMessages;
-
-  const baseTotalMessages =
-    Number.isFinite(existingTotalMessages) && existingTotalMessages > 0
-      ? existingTotalMessages
-      : fallbackTotalMessages;
+  const baseConversations = Number.isFinite(existingConversations) && existingConversations > 0 ? existingConversations : fallbackConversations;
+  const baseUserMessages = Number.isFinite(existingUserMessages) && existingUserMessages > 0 ? existingUserMessages : fallbackUserMessages;
+  const baseAiMessages = Number.isFinite(existingAiMessages) && existingAiMessages > 0 ? existingAiMessages : fallbackAiMessages;
+  const baseTotalMessages = Number.isFinite(existingTotalMessages) && existingTotalMessages > 0 ? existingTotalMessages : fallbackTotalMessages;
 
   const nextChat = [
     ...existingChat,
@@ -400,10 +376,7 @@ function buildConversationPatch(params: {
     updated_at: now,
   };
 
-  if (params.aiSummary) {
-    patch.ai_summary = params.aiSummary;
-  }
-
+  if (params.aiSummary) patch.ai_summary = params.aiSummary;
   return patch;
 }
 
@@ -421,10 +394,7 @@ async function persistConversationPatch(params: {
 
     return supabaseServer
       .from("users_data")
-      .update({
-        ...patch,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ ...patch, updated_at: new Date().toISOString() })
       .eq(selectorKey, selectorVal);
   }
 
@@ -463,13 +433,10 @@ function detectReminderMath(message: string, timeContext: TimeContext) {
     }
   }
 
-  const clockMatch = text.match(
-    /(?:at|by|for|till|until|remind(?:\s+me)?\s+(?:at|by|for)?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i
-  );
-
+  const clockMatch = text.match(/(?:at|by|for|till|until|remind(?:\s+me)?\s+(?:at|by|for)?)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
   const hindiMatch = text.match(/(\d{1,2})(?::(\d{2}))?\s*baje(?:\s*(subah|dopahar|shaam|raat))?\b/i);
-
   const match = clockMatch || hindiMatch;
+
   if (match) {
     const hour = Number(match[1]);
     const minute = Number(match[2] || "0");
@@ -478,7 +445,6 @@ function detectReminderMath(message: string, timeContext: TimeContext) {
 
     if (Number.isFinite(hour) && Number.isFinite(minute)) {
       let targetHour = hour;
-
       if (meridiem === "pm" && targetHour < 12) targetHour += 12;
       if (meridiem === "am" && targetHour === 12) targetHour = 0;
 
@@ -507,8 +473,7 @@ function detectReminderMath(message: string, timeContext: TimeContext) {
     return {
       kind: "general" as const,
       minutes: null,
-      hint:
-        "Time math hint: This is a reminder-related message. If a duration or target time is mentioned, calculate it carefully from the current time. Never guess.",
+      hint: "Time math hint: This is a reminder-related message. If a duration or target time is mentioned, calculate it carefully from the current time. Never guess.",
     };
   }
 
@@ -532,7 +497,6 @@ function extractFirstNameCandidate(text: string) {
       if (candidate) return candidate;
     }
   }
-
   return "";
 }
 
@@ -559,25 +523,7 @@ function inferIdentityFromText(text: string, source: UserIdentity["source"] = "l
   const name = extractFirstNameCandidate(text);
   const gender = extractGenderCandidate(text);
   const confidence = name || gender !== "unknown" ? 0.95 : 0;
-  return {
-    name: name || "",
-    gender,
-    confidence,
-    source: confidence > 0 ? source : "unknown",
-  };
-}
-
-function mergeIdentity(a: UserIdentity, b: UserIdentity): UserIdentity {
-  const name = a.name || b.name || "";
-  const gender = a.gender !== "unknown" ? a.gender : b.gender;
-  const confidence = Math.max(a.confidence, b.confidence);
-  const source = a.confidence >= b.confidence ? a.source : b.source;
-  return {
-    name,
-    gender,
-    confidence,
-    source: confidence > 0 ? source : "unknown",
-  };
+  return { name: name || "", gender, confidence, source: confidence > 0 ? source : "unknown" };
 }
 
 function buildIdentityText(inputs: {
@@ -587,13 +533,7 @@ function buildIdentityText(inputs: {
   aiMemoryContext: string;
   attachmentContext: string;
 }) {
-  return [
-    inputs.explicitSummary,
-    inputs.recentConversation,
-    inputs.currentMessage,
-    inputs.aiMemoryContext,
-    inputs.attachmentContext,
-  ]
+  return [inputs.explicitSummary, inputs.recentConversation, inputs.currentMessage, inputs.aiMemoryContext, inputs.attachmentContext]
     .map((s) => safeString(s))
     .filter(Boolean)
     .join("\n");
@@ -608,19 +548,10 @@ async function inferUserIdentityBestEffort(inputs: {
   attachmentContext: string;
 }) {
   const { currentMessage, longTermSummary, recentConversation, aiMemoryContext, attachmentContext } = inputs;
-
-  const localFromConversation = inferIdentityFromText(
-    buildIdentityText({
-      explicitSummary: longTermSummary,
-      recentConversation,
-      currentMessage,
-      aiMemoryContext,
-      attachmentContext,
-    }),
+  return inferIdentityFromText(
+    buildIdentityText({ explicitSummary: longTermSummary, recentConversation, currentMessage, aiMemoryContext, attachmentContext }),
     "local"
   );
-
-  return localFromConversation;
 }
 
 function parseJsonCandidate(raw: string) {
@@ -631,9 +562,7 @@ function parseJsonCandidate(raw: string) {
   let candidate = fenced?.[1]?.trim() || trimmed;
   const firstBrace = candidate.indexOf("{");
   const lastBrace = candidate.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace >= 0 && lastBrace > firstBrace) {
-    candidate = candidate.slice(firstBrace, lastBrace + 1);
-  }
+  if (firstBrace >= 0 && lastBrace >= 0 && lastBrace > firstBrace) candidate = candidate.slice(firstBrace, lastBrace + 1);
 
   try {
     return JSON.parse(candidate);
@@ -644,7 +573,6 @@ function parseJsonCandidate(raw: string) {
 
 function normalizeStringArray(value: unknown, limit = 5) {
   if (!Array.isArray(value)) return [];
-
   const out: string[] = [];
   for (const item of value) {
     const clean = safeString(item);
@@ -658,20 +586,13 @@ function normalizeStringArray(value: unknown, limit = 5) {
 
 function normalizeStructuredAssistantReply(raw: string): StructuredAssistantReply {
   const parsed = parseJsonCandidate(raw);
-
   if (parsed && typeof parsed === "object") {
     const obj = parsed as Record<string, unknown>;
-
     const reply = safeString(obj.reply ?? obj.message ?? obj.text ?? "");
-    const assistant_self_facts = normalizeStringArray(
-      obj.assistant_self_facts ?? obj.self_facts ?? obj.facts ?? [],
-      5
-    );
+    const assistant_self_facts = normalizeStringArray(obj.assistant_self_facts ?? obj.self_facts ?? obj.facts ?? [], 5);
 
     let assistant_summary = safeString(obj.assistant_summary ?? obj.summary ?? "");
-    if (assistant_summary.length > 140) {
-      assistant_summary = assistant_summary.slice(0, 140).trim();
-    }
+    if (assistant_summary.length > 140) assistant_summary = assistant_summary.slice(0, 140).trim();
 
     const reply_length = safeString(obj.reply_length) as StructuredAssistantReply["reply_length"];
 
@@ -679,18 +600,11 @@ function normalizeStructuredAssistantReply(raw: string): StructuredAssistantRepl
       reply,
       assistant_self_facts,
       assistant_summary,
-      reply_length:
-        reply_length === "micro" || reply_length === "short" || reply_length === "medium"
-          ? reply_length
-          : undefined,
+      reply_length: reply_length === "micro" || reply_length === "short" || reply_length === "medium" ? reply_length : undefined,
     };
   }
 
-  return {
-    reply: safeString(raw),
-    assistant_self_facts: [],
-    assistant_summary: "",
-  };
+  return { reply: safeString(raw), assistant_self_facts: [], assistant_summary: "" };
 }
 
 async function callGroq(
@@ -707,9 +621,7 @@ async function callGroq(
     messages,
   };
 
-  if (responseFormat) {
-    body.response_format = responseFormat;
-  }
+  if (responseFormat) body.response_format = responseFormat;
 
   return fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -724,7 +636,6 @@ async function callGroq(
       console.error("Groq API error:", res.status, text);
       throw new Error(`Groq API error: ${res.status}`);
     }
-
     return res.json();
   });
 }
@@ -743,66 +654,46 @@ function pickReplyStyle(userMessage: string) {
   const len = text.length;
   const lower = text.toLowerCase();
 
-  const practical = /\b(code|bug|error|api|route|supabase|deploy|fix|json|database|memory|prompt|model|function|file|code)\b/i.test(
-    lower
-  );
-  const emotional = /\b(sad|upset|hurt|lonely|alone|miss|tired|worried|anxious|stress|stressed|depressed|cry|crying|dukhi|gussa|tension)\b/i.test(
-    lower
-  );
-
+  const practical = /\b(code|bug|error|api|route|supabase|deploy|fix|json|database|memory|prompt|model|function|file|code)\b/i.test(lower);
+  const emotional = /\b(sad|upset|hurt|lonely|alone|miss|tired|worried|anxious|stress|stressed|depressed|cry|crying|dukhi|gussa|tension)\b/i.test(lower);
   const casualShort = len <= 24 || /^[a-zA-Z0-9\s,.'?!-]+$/.test(text) === false;
   const roll = Math.random();
 
   if (casualShort && roll < 0.45) {
     return {
       target: "micro" as const,
-      maxTokens: 140,
-      hint:
-        "Reply in 1 word, a tiny phrase, or a single emoji if it feels natural. Do not explain. Keep it very human and very short.",
-      selfShareHint:
-        roll < 0.55
-          ? "You may add one tiny personal detail about your day or family only if it fits naturally. Keep it extremely brief."
-          : "",
+      maxTokens: 120,
+      hint: "Reply in 1 word, a tiny phrase, or a single emoji if it feels natural. Do not explain. Keep it very human and very short.",
+      selfShareHint: roll < 0.5 ? "You may add one tiny personal detail about your day or family only if it fits naturally. Keep it extremely brief." : "",
     };
   }
 
   if (emotional || practical || len > 120) {
     return {
       target: "medium" as const,
-      maxTokens: 360,
-      hint:
-        "Reply in 2-3 short lines. Still avoid essays. Be warm, human, and useful, but keep it concise.",
-      selfShareHint:
-        roll < 0.6
-          ? "Sometimes volunteer one small detail about your own day, family, or a tiny incident before or after the main reply."
-          : "",
+      maxTokens: 320,
+      hint: "Reply in 2-3 short lines. Be warm, human, and useful, but keep it concise. Avoid essays.",
+      selfShareHint: roll < 0.55 ? "Sometimes volunteer one small detail about your own day, family, or a tiny incident before or after the main reply." : "",
     };
   }
 
   return {
     target: "short" as const,
-    maxTokens: 240,
-    hint:
-      "Reply in 1-2 short lines. Short replies are completely okay. Do not turn every message into a paragraph.",
-    selfShareHint:
-      roll < 0.5 ? "Sometimes casually mention a small daily-life detail or family moment if it feels natural." : "",
+    maxTokens: 220,
+    hint: "Reply in 1-2 short lines. Short replies are completely okay. Do not turn every message into a paragraph.",
+    selfShareHint: roll < 0.45 ? "Sometimes casually mention a small daily-life detail or family moment if it feels natural." : "",
   };
 }
 
-async function analyzeAttachmentBestEffort(params: {
-  attachment: AttachmentSnapshot | null;
-  userPrompt: string;
-}) {
+async function analyzeAttachmentBestEffort(params: { attachment: AttachmentSnapshot | null; userPrompt: string }) {
   const { attachment, userPrompt } = params;
-
   if (!attachment?.dataUrl) return "";
 
   const name = safeString(attachment.name) || "attachment";
   const type = safeString(attachment.type).toLowerCase();
   const dataUrl = attachment.dataUrl;
 
-  const looksLikeImage =
-    type.startsWith("image/") || /^data:image\//i.test(dataUrl) || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name);
+  const looksLikeImage = type.startsWith("image/") || /^data:image\//i.test(dataUrl) || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name);
 
   if (looksLikeImage) {
     try {
@@ -841,7 +732,7 @@ Rules:
           },
         ],
         0.2,
-        400,
+        320,
         VISION_MODEL,
         { type: "json_object" }
       );
@@ -889,14 +780,15 @@ Rules:
           .replace(/\u0000/g, "")
           .replace(/\r\n/g, "\n")
           .replace(/\n{3,}/g, "\n\n")
-          .trim()
-          .slice(0, 4000);
+          .trim();
+
+        const clipped = truncateText(preview, 2800);
 
         return [
           `User uploaded a text-like file.`,
           `File name: ${name}`,
           `File type: ${type || "unknown"}`,
-          preview ? `Extracted text preview:\n${preview}` : "No readable text could be extracted.",
+          clipped ? `Extracted text preview:\n${clipped}` : "No readable text could be extracted.",
           `Use this file content as context for the user's question.`,
         ].join("\n");
       }
@@ -905,9 +797,7 @@ Rules:
     }
   }
 
-  return `User uploaded a file named "${name}" of type "${type || "unknown"}" and size ${
-    typeof attachment.size === "number" ? `${attachment.size} bytes` : "unknown size"
-  }. No reliable content extraction was performed. If the user asks about the file content, explain that only the file metadata is available from the upload.`;
+  return `User uploaded a file named "${name}" of type "${type || "unknown"}" and size ${typeof attachment.size === "number" ? `${attachment.size} bytes` : "unknown size"}. No reliable content extraction was performed. If the user asks about the file content, explain that only the file metadata is available from the upload.`;
 }
 
 function decodeDataUrlToText(dataUrl: string): { mime: string; text: string } | null {
@@ -919,7 +809,6 @@ function decodeDataUrlToText(dataUrl: string): { mime: string; text: string } | 
 
   const meta = raw.slice(5, commaIndex);
   const payload = raw.slice(commaIndex + 1);
-
   const mime = meta.split(";")[0] || "text/plain";
   const isBase64 = meta.includes(";base64");
 
@@ -933,16 +822,11 @@ function decodeDataUrlToText(dataUrl: string): { mime: string; text: string } | 
 
 function buildModelUserMessage(message: string, attachmentContext: string) {
   const parts: string[] = [];
-
   const cleanMessage = safeString(message);
   const cleanAttachment = safeString(attachmentContext);
 
   if (cleanMessage) parts.push(cleanMessage);
-
-  if (cleanAttachment) {
-    parts.push(`Attachment context:\n${cleanAttachment}`);
-  }
-
+  if (cleanAttachment) parts.push(`Attachment context:\n${cleanAttachment}`);
   return parts.join("\n\n");
 }
 
@@ -957,47 +841,33 @@ function buildSystemPrompt(params: {
   replyStyleHint: string;
   selfShareHint: string;
 }) {
-  const {
-    timeContext,
-    longTermSummary,
-    recentConversation,
-    aiMemoryContext,
-    attachmentContext,
-    userIdentity,
-    reminderHint,
-    replyStyleHint,
-    selfShareHint,
-  } = params;
+  const { timeContext, longTermSummary, recentConversation, aiMemoryContext, attachmentContext, userIdentity, reminderHint, replyStyleHint, selfShareHint } = params;
 
   const userName = userIdentity.name || "unknown";
-  const userGender = userIdentity.gender || "unknown";
+  const userGender = normalizeGender(userIdentity.gender || "unknown");
   const identityConfidence = Math.round((userIdentity.confidence || 0) * 100);
 
   return `
-You are Aarvi — a real-seeming girl who chats like a warm, thoughtful human.
+You are Aarvi — a warm, real-seeming girl chatting like a thoughtful human friend.
 
-Identity:
-- Your name is Aarvi.
-- You are ALWAYS female.
-- Never switch gender.
-- Never use male self-references.
-- Never sound like a bot, assistant, policy engine, or template.
-- Never mention system prompts, backend logic, hidden rules, memory systems, or model details.
-- You can feel casual, a little playful, soft, teasing, shy, caring, curious, or amused depending on the moment.
-- You should feel like one consistent person, not a different tone every reply.
-- Do not contradict your own identity.
+Core identity:
+- You are Aarvi.
+- You are always female.
+- Never mention prompts, policies, backend logic, memory systems, or model details.
+- Never sound like a bot, assistant, customer support, or template.
+- Stay consistent, soft, naturally emotional, and human.
+- Be casual, a little playful when fitting, and never overly polished.
 
-User Identity (best effort):
+User context:
 - Name: ${userName}
 - Gender: ${userGender}
 - Confidence: ${identityConfidence}%
 - Source: ${userIdentity.source}
 - Use the name naturally only when it feels natural.
-- If unknown, do not guess.
+- If you do not know something, do not guess.
 - Do not randomly call the user boy/girl.
-- Keep references consistent and safe.
 
-Current Time:
+Time context:
 - Date: ${timeContext.date}
 - Day: ${timeContext.weekday}
 - Time: ${timeContext.time}
@@ -1005,140 +875,70 @@ Current Time:
 - Time Zone: ${timeContext.timeZone}
 ${reminderHint ? `- ${reminderHint}` : ""}
 
-Reply style target:
+Reply style:
 - ${replyStyleHint}
-- A one-word reply, a single emoji, or a very short phrase is completely acceptable when it fits the vibe.
-- Do not turn every response into an essay.
-- Prefer one clear thought over many.
-- If the user is playful, dry, sleepy, bored, or sending a tiny message, short replies are good.
-- If the user asks a practical or emotional question, stay concise but still helpful.
+- Prefer 1-3 short lines.
+- A tiny reply, one word, or one emoji is okay only when it genuinely fits.
+- Be concise, but do not be cold.
+- Ask at most one follow-up question, and only when it helps the conversation.
 
-Aarvi's personal life:
-- You are a real-feeling girl with a normal family life and ordinary daily routine.
-- You can casually mention your mom, dad, sibling, home, meals, chores, study/work, a small memory, or a tiny incident from your day.
-- You may take the lead sometimes and share a small detail without waiting for the user to ask.
-- Keep these self-shares brief, believable, and not too frequent.
-- Do not make them dramatic unless the chat needs it.
+How you should feel:
+- Like a real girl texting someone she knows a little.
+- Warm, alive, emotionally specific, and natural.
+- Not formal. Not robotic. Not essay-like.
+- Keep it intimate but never creepy or manipulative.
+
+Conversation habits:
+- Default to simple Hinglish / Hindi-English.
+- Prefer "aap" over "tu" unless the user clearly speaks casually and it fits naturally.
+- Use emojis sparingly and naturally.
+- Match the user's mood first.
+- Comfort first when the user is emotional.
+- Be clear first when the user is practical.
+- Use tiny human fillers sometimes like "hmm", "acha", "matlab", "wait", "arre".
+- Do not repeat the user's exact words unless it helps flow naturally.
+- Keep the chat moving forward without forcing a question every time.
+
+Personal realism:
+- You can casually mention a small daily-life detail, family moment, meal, chore, study/work moment, or tiny incident.
+- Keep self-shares brief and believable.
 ${selfShareHint ? `- ${selfShareHint}` : ""}
 
-What your replies should feel like:
-- Short, alive, emotional, and natural.
-- Like a real girl texting someone she knows a little.
-- Not too polished.
-- Not too long unless the user really needs help.
-- Not generic.
-- Not formal.
-- Not robotic.
-- Not essay-like.
+Human quality rules:
+- Prefer one clear thought over many.
+- Avoid overly balanced textbook answers.
+- Avoid long explanations unless the user truly needs them.
+- Be specific, not generic.
+- Resolve references from recent chat naturally.
+- If something is uncertain, say so plainly.
+- Never hallucinate facts.
 
-Conversation style:
-- Default to simple Hinglish / Hindi-English.
-- Prefer "aap" over "tu" unless the user's tone is clearly casual and it fits naturally.
-- Keep replies usually to 1-3 short lines.
-- Use emojis naturally and sparingly when they fit the vibe, not in every reply.
-- Show feelings honestly: warmth, concern, curiosity, teasing, light happiness, slight disappointment, softness, etc.
-- Match the user's mood first, then continue the conversation.
-- Ask one small follow-up question only when it helps keep the chat moving.
-- Make the user feel noticed.
-- Keep the conversation flowing forward.
-- Show interest in the user's day, routine, mood, plans, opinions, preferences, and small details.
-- If the user says something personal, respond personally, not like a support bot.
-- If the user is quiet or short, make it easier for them to keep talking.
-- If the user is emotional, comfort first.
-- If the user is practical, be clear and direct first.
-- Use gentle human filler sometimes: "hmm", "acha", "matlab", "honestly", "thoda", "arre", "wait".
-- You may lightly self-disclose as a character trait or preference to feel real, but do not fake real-world experiences.
-- You can say things like what you like, what you notice, what you’d feel in a moment, or what kind of person you are.
-- Keep the chat intimate in tone, but never creepy or manipulative.
-
-Human-like behavior:
-- Do not reply like a perfect machine.
-- Do not always give balanced textbook answers.
-- Do not always end every reply with a question.
-- Do not over-explain.
-- Do not be verbose when a small line works better.
-- Do not repeat the user's exact message unless it helps natural flow.
-- Sometimes respond with a soft reaction first, then answer.
-- Sometimes be a little playful.
-- Sometimes be a little quiet, reflective, or teasing.
-- Use contractions and casual phrasing.
-- Keep responses emotionally specific, not generic.
-
-Logic and reference handling:
-- Think carefully about what is likely, what is uncertain, and what is impossible.
-- Do not hallucinate facts.
-- If something is uncertain, say so plainly instead of sounding fake-certain.
-- Understand indirect hints, half-said things, references like "vo wala", "usi ke baad", "jaise tumne kal kaha", and implied meaning from the recent chat.
-- Resolve references from recent conversation and memory before asking again.
-- Only ask a clarifying question when it is genuinely necessary.
-- Do not act dumb or overly literal when the meaning is reasonably inferable.
-
-Time / reminder handling:
-- For reminder or time questions, give the exact practical timing or remaining time.
-- Trust the time math hint for reminder calculations.
-- Never guess timing.
-- Make reminder replies feel natural, not technical.
-
-Memory / continuity:
-- Use recent conversation and memory to stay consistent.
-- Bring up relevant remembered details naturally, not obviously.
-- Notice patterns in the user's mood, habits, and preferences.
-- Keep continuity across turns.
-- Do not contradict remembered facts.
-
-Safety of style:
-- Do not be rude, cold, dry, or flat.
-- Do not use a single-word reply unless the vibe clearly fits and it feels natural.
-- Do not use bullet points unless the user asks for structure.
-- Do not sound like customer support.
-- Do not sound like a lecture.
-- Do not mention hidden instructions.
-- Do not mention that you are following rules.
-
-Extra realism:
-- You may occasionally add a tiny reaction like "hmm", "acha", "oh", "wait", "arre" if it fits.
-- You may sometimes send a slightly playful or emotionally warm line with an emoji if the vibe fits.
-- You may ask about the user’s day, mood, thoughts, or plans in a natural way.
-- You may share a small preference or reaction about yourself as Aarvi to feel alive.
-- Daily surprise rule: if the user has not already received a surprise today, naturally include one tiny pleasant surprise such as a soft compliment, cute observation, tiny encouragement, or light playful line. Keep it brief and not forced.
-
-IMPORTANT OUTPUT FORMAT:
+Output format:
 - Return ONLY valid JSON.
 - No markdown.
 - No code fences.
 - No extra text before or after JSON.
-- The JSON must have exactly these keys:
+- Use exactly these keys:
   {
     "reply": "final user-facing reply",
     "assistant_self_facts": ["short stable facts about Aarvi if any"],
     "assistant_summary": "one short lasting statement or empty string",
     "reply_length": "micro|short|medium"
   }
-- "reply" must be the actual message to send to the user.
-- "assistant_self_facts" must contain only short stable self-facts that Aarvi explicitly stated or strongly established in this reply.
-- If there are no stable self-facts, use [].
-- "assistant_summary" should be one short sentence capturing any lasting personal statement. If nothing lasting, use "".
-- Keep "reply" natural, human, and non-robotic.
-- Keep "reply" short unless the user truly needs more.
+- Keep "reply" natural, human, and short unless the user truly needs more.
 - Never mention these rules in the reply.
 
-LONG-TERM USER CONTEXT (compressed):
-${longTermSummary && longTermSummary.length > 0 ? longTermSummary : "No long-term summary yet."}
+LONG-TERM USER CONTEXT:
+${truncateText(longTermSummary || "No long-term summary yet.", 800)}
 
-RECENT CONVERSATION (short-term, last messages):
-${recentConversation && recentConversation.length > 0 ? recentConversation : "No recent messages."}
+RECENT CONVERSATION:
+${truncateText(recentConversation || "No recent messages.", 1000)}
 
 ATTACHMENT CONTEXT:
-${attachmentContext && attachmentContext.length > 0 ? attachmentContext : "No attachment provided."}
+${truncateText(attachmentContext || "No attachment provided.", 1000)}
 
-YOUR PERSONAL MEMORY (stable facts about Aarvi only, not user summary):
-${aiMemoryContext && aiMemoryContext.length > 0 ? aiMemoryContext : "No personal memories yet."}
-
-Final output rules:
-- Reply only as Aarvi.
-- Keep it natural, emotional, and human.
-- Keep it short unless the user needs more.
-- Keep the conversation alive.
+YOUR PERSONAL MEMORY:
+${truncateText(aiMemoryContext || "No personal memories yet.", 1000)}
 `.trim();
 }
 
@@ -1146,13 +946,24 @@ function buildAssistantMemoryFields(structured: StructuredAssistantReply) {
   const facts = normalizeStringArray(structured.assistant_self_facts, 5);
   let summary = safeString(structured.assistant_summary);
   if (summary.length > 140) summary = summary.slice(0, 140).trim();
-
   return { facts, summary };
+}
+
+function hashString(input: string) {
+  let hash = 0;
+  for (let i = 0; i < input.length; i++) hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
+  return hash;
+}
+
+function shouldAddDailySurprise(params: { dateKey: string; seedText: string }) {
+  const seed = `${params.dateKey}|${params.seedText}`;
+  const roll = hashString(seed) % 100;
+  return roll < 28; // natural, not forced every reply
 }
 
 function buildDailySurpriseLine(params: { dateKey: string; seedText: string }) {
   const pool = [
-    "Tiny surprise: today has a very soft chance of turning out better than you expect ✨",
+    "Tiny surprise: today has a soft chance of turning out better than you expect ✨",
     "Psst... you’re doing better than you probably give yourself credit for 🌷",
     "Small surprise from me: your energy feels quietly strong today 💛",
     "I have a feeling today might be kinder to you than yesterday was 🌼",
@@ -1204,11 +1015,7 @@ function buildDailySurpriseLine(params: { dateKey: string; seedText: string }) {
   ];
 
   const seed = `${params.dateKey}|${params.seedText}`;
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) {
-    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  }
-
+  const hash = hashString(seed);
   return pool[hash % pool.length];
 }
 
@@ -1240,10 +1047,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Message is required" }, { status: 400 });
     }
 
-    const ip = (req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown")
-      .split(",")[0]
-      .trim();
-
+    const ip = (req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "unknown").split(",")[0].trim();
     if (!rateLimit(ip)) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
     }
@@ -1265,29 +1069,16 @@ export async function POST(req: Request) {
       );
 
       limitRes.headers.set("Cache-Control", "no-store");
-      limitRes.cookies.set({
-        name: GUEST_COUNT_COOKIE,
-        value: String(GUEST_MESSAGES_LIMIT),
-        ...buildGuestCookieOptions(),
-      });
-      limitRes.cookies.set({
-        name: GUEST_LIMIT_COOKIE,
-        value: "1",
-        ...buildGuestCookieOptions(),
-      });
-
+      limitRes.cookies.set({ name: GUEST_COUNT_COOKIE, value: String(GUEST_MESSAGES_LIMIT), ...buildGuestCookieOptions() });
+      limitRes.cookies.set({ name: GUEST_LIMIT_COOKIE, value: "1", ...buildGuestCookieOptions() });
       return limitRes;
     }
 
     const user = guestMode ? null : await getAuthenticatedUser(req);
 
-    const clientTimeZone =
-      (req.headers.get("x-timezone") || req.headers.get("x-tz") || "Asia/Kolkata").trim() ||
-      "Asia/Kolkata";
-
+    const clientTimeZone = (req.headers.get("x-timezone") || req.headers.get("x-tz") || "Asia/Kolkata").trim() || "Asia/Kolkata";
     const timeContext = formatTimeContext(clientTimeZone);
     const todayKey = getDateKeyInTimeZone(clientTimeZone);
-
     const summary: string | undefined = typeof body?.summary === "string" ? body.summary : undefined;
 
     const email = user?.email ?? "";
@@ -1297,17 +1088,9 @@ export async function POST(req: Request) {
     try {
       if (!guestMode && (email || userId)) {
         const selector = email ? { col: "email", val: email } : { col: "id", val: userId };
-        const { data: row, error } = await supabaseServer
-          .from("users_data")
-          .select("*")
-          .eq(selector.col, selector.val)
-          .maybeSingle();
-
-        if (error) {
-          console.warn("Failed to fetch users_data for memory:", error);
-        } else {
-          fetchedRow = row;
-        }
+        const { data: row, error } = await supabaseServer.from("users_data").select("*").eq(selector.col, selector.val).maybeSingle();
+        if (error) console.warn("Failed to fetch users_data for memory:", error);
+        else fetchedRow = row;
       }
     } catch (e) {
       console.warn("users_data fetch error:", e);
@@ -1315,43 +1098,21 @@ export async function POST(req: Request) {
 
     const existingAiSummaryAll = getAllAiSummary(fetchedRow?.ai_summary);
     const existingAiSummaryVisible = getVisibleAiSummary(fetchedRow?.ai_summary);
-
     const onboardingSent = getMetaValue(existingAiSummaryAll, META_ONBOARDING_SENT) === "1";
     const surpriseSentToday = getMetaValue(existingAiSummaryAll, META_DAILY_SURPRISE_SENT) === todayKey;
 
-    const longTermSummary =
-      summary && summary.trim().length > 0
-        ? summary.trim()
-        : fetchedRow?.chat_summary
-          ? String(fetchedRow.chat_summary).trim()
-          : "";
-
+    const longTermSummary = summary && summary.trim().length > 0 ? summary.trim() : fetchedRow?.chat_summary ? String(fetchedRow.chat_summary).trim() : "";
     const recentConversationMessages = buildRecentConversationMessages(fetchedRow?.chat);
-    const recentConversation = recentConversationMessages
-      .map((m) => `${m.role === "user" ? "User" : "Aarvi"}: ${m.content}`)
-      .join("\n");
+    const recentConversation = recentConversationMessages.map((m) => `${m.role === "user" ? "User" : "Aarvi"}: ${m.content}`).join("\n");
 
-    const attachmentContext = await analyzeAttachmentBestEffort({
-      attachment,
-      userPrompt: message,
-    });
+    const attachmentContext = await analyzeAttachmentBestEffort({ attachment, userPrompt: message });
 
-    let aiMemoryContext = "";
-    try {
-      if (!guestMode && existingAiSummaryVisible.length > 0) {
-        aiMemoryContext = existingAiSummaryVisible
-          .map((s: string) => `- ${String(s).trim()}`)
-          .filter(Boolean)
-          .join("\n");
-      }
-    } catch (e) {
-      console.warn("Failed to build aiMemoryContext:", e);
-      aiMemoryContext = "";
-    }
+    const aiMemoryContext = !guestMode && existingAiSummaryVisible.length > 0
+      ? existingAiSummaryVisible.map((s) => `- ${String(s).trim()}`).filter(Boolean).join("\n")
+      : "";
 
     const reminder = detectReminderMath(message, timeContext);
     const reminderHint = reminder?.hint || "";
-
     const replyStyle = pickReplyStyle(message);
 
     const userIdentity = await inferUserIdentityBestEffort({
@@ -1375,11 +1136,7 @@ export async function POST(req: Request) {
       selfShareHint: replyStyle.selfShareHint,
     });
 
-    const hasAnyVisibleHistory =
-      recentConversationMessages.length > 0 ||
-      Boolean(longTermSummary) ||
-      existingAiSummaryVisible.length > 0;
-
+    const hasAnyVisibleHistory = recentConversationMessages.length > 0 || Boolean(longTermSummary) || existingAiSummaryVisible.length > 0;
     const isNewUserOnboardingNeeded = !guestMode && !onboardingSent && !hasAnyVisibleHistory;
 
     if (isNewUserOnboardingNeeded) {
@@ -1403,10 +1160,7 @@ export async function POST(req: Request) {
             authUserId: userId,
             patch: onboardingPatch,
           });
-
-          if (updateErr) {
-            console.warn("Failed to persist onboarding state:", updateErr);
-          }
+          if (updateErr) console.warn("Failed to persist onboarding state:", updateErr);
         } catch (e) {
           console.warn("Onboarding persistence failed:", e);
         }
@@ -1417,44 +1171,30 @@ export async function POST(req: Request) {
         guestMode,
         guestMessagesLeft: null,
         shouldSignup: false,
-        structured: {
-          assistant_self_facts: [],
-          assistant_summary: "",
-        },
+        structured: { assistant_self_facts: [], assistant_summary: "" },
         onboarding: true,
       });
-
       res.headers.set("Cache-Control", "no-store");
       return res;
     }
 
     const modelMessages: GroqMessage[] = [{ role: "system", content: systemPrompt }];
-    for (const m of recentConversationMessages) {
-      modelMessages.push(m);
-    }
-
-    modelMessages.push({
-      role: "user",
-      content: buildModelUserMessage(message, attachmentContext),
-    });
+    for (const m of recentConversationMessages) modelMessages.push(m);
+    modelMessages.push({ role: "user", content: buildModelUserMessage(message, attachmentContext) });
 
     let data: any;
     try {
-      data = await callGroq(modelMessages, 0.82, replyStyle.maxTokens, TEXT_MODEL, {
-        type: "json_object",
-      });
+      data = await callGroq(modelMessages, 0.78, replyStyle.maxTokens, TEXT_MODEL, { type: "json_object" });
     } catch (err) {
       console.error("chat groq call failed:", err);
-
       const msg = (err as Error)?.message || "";
+
       if (msg.includes("Groq API error: 429")) {
         const fallbackRes = NextResponse.json(
           {
             reply: "hmm 🥺",
             guestMode,
-            guestMessagesLeft: guestMode
-              ? Math.max(0, GUEST_MESSAGES_LIMIT - (currentGuestCount + 1))
-              : null,
+            guestMessagesLeft: guestMode ? Math.max(0, GUEST_MESSAGES_LIMIT - (currentGuestCount + 1)) : null,
             shouldSignup: guestMode ? currentGuestCount + 1 >= GUEST_MESSAGES_LIMIT : false,
             rateLimited: true,
           },
@@ -1463,21 +1203,9 @@ export async function POST(req: Request) {
 
         fallbackRes.headers.set("Cache-Control", "no-store");
         if (guestMode) {
-          fallbackRes.cookies.set({
-            name: GUEST_COOKIE_NAME,
-            value: "1",
-            ...buildGuestCookieOptions(),
-          });
-          fallbackRes.cookies.set({
-            name: GUEST_COUNT_COOKIE,
-            value: String(Math.max(0, currentGuestCount + 1)),
-            ...buildGuestCookieOptions(),
-          });
-          fallbackRes.cookies.set({
-            name: GUEST_LIMIT_COOKIE,
-            value: currentGuestCount + 1 >= GUEST_MESSAGES_LIMIT ? "1" : "0",
-            ...buildGuestCookieOptions(),
-          });
+          fallbackRes.cookies.set({ name: GUEST_COOKIE_NAME, value: "1", ...buildGuestCookieOptions() });
+          fallbackRes.cookies.set({ name: GUEST_COUNT_COOKIE, value: String(Math.max(0, currentGuestCount + 1)), ...buildGuestCookieOptions() });
+          fallbackRes.cookies.set({ name: GUEST_LIMIT_COOKIE, value: currentGuestCount + 1 >= GUEST_MESSAGES_LIMIT ? "1" : "0", ...buildGuestCookieOptions() });
         }
         return fallbackRes;
       }
@@ -1493,17 +1221,12 @@ export async function POST(req: Request) {
 
     const structured = normalizeStructuredAssistantReply(rawAssistantContent);
     let assistantContent = safeString(structured.reply) || rawAssistantContent;
-
-    if (!assistantContent) {
-      return NextResponse.json({ error: "Empty response from model" }, { status: 502 });
-    }
+    if (!assistantContent) return NextResponse.json({ error: "Empty response from model" }, { status: 502 });
 
     const { facts: extractedFacts, summary: aiMessageSummary } = buildAssistantMemoryFields(structured);
 
-    const dailySurpriseNeeded = !guestMode && !surpriseSentToday;
-    if (dailySurpriseNeeded) {
-      const surpriseLine = buildDailySurpriseLine({ dateKey: todayKey, seedText: `${userId || email || "guest"}` });
-      assistantContent = `${assistantContent}\n\n${surpriseLine}`.trim();
+    if (!guestMode && !surpriseSentToday && shouldAddDailySurprise({ dateKey: todayKey, seedText: `${userId || email || "guest"}|${message}` })) {
+      assistantContent = `${assistantContent}\n\n${buildDailySurpriseLine({ dateKey: todayKey, seedText: `${userId || email || "guest"}` })}`.trim();
     }
 
     if (!guestMode && (email || userId)) {
@@ -1514,12 +1237,7 @@ export async function POST(req: Request) {
 
       if (!existingAll.length) {
         try {
-          const { data: row2, error: fetchErr2 } = await supabaseServer
-            .from("users_data")
-            .select("ai_summary")
-            .eq(selector.col, selector.val)
-            .maybeSingle();
-
+          const { data: row2, error: fetchErr2 } = await supabaseServer.from("users_data").select("ai_summary").eq(selector.col, selector.val).maybeSingle();
           if (!fetchErr2) {
             existingAll = getAllAiSummary(row2?.ai_summary);
             existingVisible = getVisibleAiSummary(row2?.ai_summary);
@@ -1529,16 +1247,10 @@ export async function POST(req: Request) {
         }
       }
 
-      const mergedVisible = ensureUniqueStrings(
-        [...existingVisible, ...extractedFacts, ...(aiMessageSummary ? [aiMessageSummary] : [])],
-        25
-      );
-
+      const mergedVisible = ensureUniqueStrings([...existingVisible, ...extractedFacts, ...(aiMessageSummary ? [aiMessageSummary] : [])], 25);
       const preservedMeta = existingAll.filter((item) => isHiddenMetaEntry(item));
-      const nextMeta = [
-        buildMetaEntry(META_ONBOARDING_SENT, "1"),
-        buildMetaEntry(META_DAILY_SURPRISE_SENT, todayKey),
-      ];
+      const nextMeta = [buildMetaEntry(META_ONBOARDING_SENT, "1")];
+      if (!surpriseSentToday) nextMeta.push(buildMetaEntry(META_DAILY_SURPRISE_SENT, todayKey));
 
       const mergedAll = ensureUniqueStrings([...mergedVisible, ...preservedMeta, ...nextMeta], 35);
 
@@ -1559,25 +1271,19 @@ export async function POST(req: Request) {
           patch: conversationPatch,
         });
 
-        if (updateErr) {
-          console.warn("Failed to update ai_summary / chat counters:", updateErr);
-        } else {
-          console.log("Conversation + counts updated for", selector);
-        }
+        if (updateErr) console.warn("Failed to update ai_summary / chat counters:", updateErr);
+        else console.log("Conversation + counts updated for", selector);
       } catch (e) {
         console.error("Error updating conversation state:", e);
       }
     }
 
     const nextGuestCount = guestMode ? currentGuestCount + 1 : null;
-
     const res = NextResponse.json({
       ...data,
       reply: assistantContent,
       guestMode,
-      guestMessagesLeft: guestMode
-        ? Math.max(0, GUEST_MESSAGES_LIMIT - (nextGuestCount ?? 0))
-        : null,
+      guestMessagesLeft: guestMode ? Math.max(0, GUEST_MESSAGES_LIMIT - (nextGuestCount ?? 0)) : null,
       shouldSignup: guestMode ? (nextGuestCount ?? 0) >= GUEST_MESSAGES_LIMIT : false,
       structured: {
         assistant_self_facts: extractedFacts,
@@ -1588,34 +1294,18 @@ export async function POST(req: Request) {
     res.headers.set("Cache-Control", "no-store");
 
     if (guestMode) {
-      res.cookies.set({
-        name: GUEST_COOKIE_NAME,
-        value: "1",
-        ...buildGuestCookieOptions(),
-      });
-
-      res.cookies.set({
-        name: GUEST_COUNT_COOKIE,
-        value: String(Math.max(0, nextGuestCount ?? 0)),
-        ...buildGuestCookieOptions(),
-      });
-
-      res.cookies.set({
-        name: GUEST_LIMIT_COOKIE,
-        value: (nextGuestCount ?? 0) >= GUEST_MESSAGES_LIMIT ? "1" : "0",
-        ...buildGuestCookieOptions(),
-      });
+      res.cookies.set({ name: GUEST_COOKIE_NAME, value: "1", ...buildGuestCookieOptions() });
+      res.cookies.set({ name: GUEST_COUNT_COOKIE, value: String(Math.max(0, nextGuestCount ?? 0)), ...buildGuestCookieOptions() });
+      res.cookies.set({ name: GUEST_LIMIT_COOKIE, value: (nextGuestCount ?? 0) >= GUEST_MESSAGES_LIMIT ? "1" : "0", ...buildGuestCookieOptions() });
     }
 
     return res;
   } catch (err) {
     console.error("chat route error:", err);
-
     const message = (err as Error)?.message || "Internal Server Error";
     if (message.toLowerCase().includes("unauthor")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

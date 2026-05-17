@@ -1456,10 +1456,7 @@ export default function HomePage() {
           ))}
         </div>
 
-        <div className="mt-5 rounded-[24px] border border-white/10 bg-white/5 p-4 text-sm text-white/65">
-          These moments refresh from <span className="text-white">chat_summary</span> and the latest memory snapshot,
-          so older ones can be replaced naturally as the conversation grows.
-        </div>
+        
 
         <div className="mt-5 grid gap-3">
           <button
