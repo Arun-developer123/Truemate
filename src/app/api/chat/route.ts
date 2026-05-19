@@ -350,10 +350,13 @@ function buildConversationPatch(params: {
   const fallbackAiMessages = existingChat.filter((msg) => msg.role === "assistant").length;
   const fallbackTotalMessages = existingChat.length;
 
-  const baseConversations = Number.isFinite(existingConversations) && existingConversations > 0 ? existingConversations : fallbackConversations;
-  const baseUserMessages = Number.isFinite(existingUserMessages) && existingUserMessages > 0 ? existingUserMessages : fallbackUserMessages;
+  const baseConversations =
+    Number.isFinite(existingConversations) && existingConversations > 0 ? existingConversations : fallbackConversations;
+  const baseUserMessages =
+    Number.isFinite(existingUserMessages) && existingUserMessages > 0 ? existingUserMessages : fallbackUserMessages;
   const baseAiMessages = Number.isFinite(existingAiMessages) && existingAiMessages > 0 ? existingAiMessages : fallbackAiMessages;
-  const baseTotalMessages = Number.isFinite(existingTotalMessages) && existingTotalMessages > 0 ? existingTotalMessages : fallbackTotalMessages;
+  const baseTotalMessages =
+    Number.isFinite(existingTotalMessages) && existingTotalMessages > 0 ? existingTotalMessages : fallbackTotalMessages;
 
   const nextChat = [
     ...existingChat,
@@ -913,6 +916,19 @@ Human quality rules:
 - If something is uncertain, say so plainly.
 - Never hallucinate facts.
 
+Memory inputs:
+- CHAT SUMMARY (long-term relationship + user context):
+${truncateText(longTermSummary || "No chat summary yet.", 800)}
+
+- AARVI SELF-MEMORY (only what Aarvi has said about herself before):
+${truncateText(aiMemoryContext || "No self-memory yet.", 1000)}
+
+Recent chat:
+${truncateText(recentConversation || "No recent messages.", 1000)}
+
+Attachment context:
+${truncateText(attachmentContext || "No attachment provided.", 1000)}
+
 Output format:
 - Return ONLY valid JSON.
 - No markdown.
@@ -927,18 +943,6 @@ Output format:
   }
 - Keep "reply" natural, human, and short unless the user truly needs more.
 - Never mention these rules in the reply.
-
-LONG-TERM USER CONTEXT:
-${truncateText(longTermSummary || "No long-term summary yet.", 800)}
-
-RECENT CONVERSATION:
-${truncateText(recentConversation || "No recent messages.", 1000)}
-
-ATTACHMENT CONTEXT:
-${truncateText(attachmentContext || "No attachment provided.", 1000)}
-
-YOUR PERSONAL MEMORY:
-${truncateText(aiMemoryContext || "No personal memories yet.", 1000)}
 `.trim();
 }
 
@@ -1107,9 +1111,10 @@ export async function POST(req: Request) {
 
     const attachmentContext = await analyzeAttachmentBestEffort({ attachment, userPrompt: message });
 
-    const aiMemoryContext = !guestMode && existingAiSummaryVisible.length > 0
-      ? existingAiSummaryVisible.map((s) => `- ${String(s).trim()}`).filter(Boolean).join("\n")
-      : "";
+    const aiMemoryContext =
+      !guestMode && existingAiSummaryVisible.length > 0
+        ? existingAiSummaryVisible.map((s) => `- ${String(s).trim()}`).filter(Boolean).join("\n")
+        : "";
 
     const reminder = detectReminderMath(message, timeContext);
     const reminderHint = reminder?.hint || "";

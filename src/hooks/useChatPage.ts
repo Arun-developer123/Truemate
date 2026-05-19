@@ -50,7 +50,18 @@ const PRESENCE_THROTTLE_MS = 30_000;
 const UNLOAD_BEACON_PATH = "/api/presence";
 const MAX_ATTACHMENT_SIZE = 8 * 1024 * 1024;
 
-const FALLBACK_BACKGROUND_OPTIONS = ["aarvi.jpg", "aarvi-1.jpg", "aarvi-2.jpg", "aarvi-3.jpg"];
+const FALLBACK_BACKGROUND_OPTIONS = [
+  "free-1.jpg",
+  "free-2.jpg",
+  "aarvi1.jpg",
+  "aarvi2.jpg",
+  "aarvi3.jpg",
+  "aarvi4.jpg",
+  "aarvi5.jpg",
+  "aarvi6.jpg",
+  "aarvi7.jpg",
+  "aarvi8.jpg",
+];
 
 const PUBLIC_BACKGROUND_PREVIEWS: Record<string, string> = {
   "free-1.jpg": "/chat-gallery/free-1.jpg",

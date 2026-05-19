@@ -66,6 +66,7 @@ type HomeData = {
   last_chat_at: string | null;
   moments: MemoryMoment[];
   journal_entries: JournalEntry[];
+  proactive_enabled: boolean;
 };
 
 type JourneyItem = {
@@ -161,6 +162,7 @@ const DEFAULT_DATA: HomeData = {
   last_chat_at: null,
   moments: [],
   journal_entries: [],
+  proactive_enabled: true,
 };
 
 function cn(...classes: Array<string | false | null | undefined>) {
@@ -542,10 +544,15 @@ export default function HomePage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    setSelectedMood(loadJson<MoodKey>("truemate_selected_mood", "calm"));
-    setJournalText(loadJson<string>("truemate_journal_draft", ""));
-    setHomeData(loadJson<HomeData>("truemate_home_data", DEFAULT_DATA));
-    void refreshHomeData();
+    const isGuest =
+  document.cookie.includes("truemate_guest=1") ||
+  localStorage.getItem("truemate_guest") === "1";
+
+setSelectedMood(isGuest ? "calm" : loadJson<MoodKey>("truemate_selected_mood", "calm"));
+setJournalText(isGuest ? "" : loadJson<string>("truemate_journal_draft", ""));
+setHomeData(isGuest ? DEFAULT_DATA : loadJson<HomeData>("truemate_home_data", DEFAULT_DATA));
+
+void refreshHomeData();
   }, []);
 
   useEffect(() => {
@@ -661,6 +668,7 @@ export default function HomePage() {
       const moodTitle = toText(fetched?.mood_title) || base.mood_title;
       const moodDescription = toText(fetched?.mood_description) || base.mood_description;
       const moodEmoji = toText(fetched?.mood_emoji) || base.mood_emoji;
+      const proactiveEnabled = Boolean(fetched?.proactive_enabled ?? true);
 
       const lastConversationTimeLabel =
         toText(fetched?.last_conversation_time_label) ||
@@ -762,6 +770,7 @@ export default function HomePage() {
         last_chat_at: stats.lastChatAt,
         moments: normalizedMoments,
         journal_entries: currentJournalEntries,
+        proactive_enabled: proactiveEnabled,
       };
 
       setHomeData(updated);
@@ -937,6 +946,38 @@ export default function HomePage() {
       console.error("saveDisplayName failed:", err);
     } finally {
       setSavingName(false);
+    }
+  }
+
+    async function toggleProactiveEnabled(nextValue: boolean) {
+    const previousState = homeData;
+
+    try {
+      const optimisticState = {
+        ...homeData,
+        proactive_enabled: nextValue,
+      };
+
+      setHomeData(optimisticState);
+      saveJson("truemate_home_data", optimisticState);
+
+      const { data: authData } = await supabase.auth.getUser();
+      const authUser = authData?.user;
+      if (!authUser) return;
+
+      const { error } = await updateUsersDataByAuthUserId(authUser.id, {
+        proactive_enabled: nextValue,
+      });
+
+      if (error) {
+        console.error("proactive_enabled update error:", error);
+        setHomeData(previousState);
+        saveJson("truemate_home_data", previousState);
+      }
+    } catch (err) {
+      console.error("toggleProactiveEnabled failed:", err);
+      setHomeData(previousState);
+      saveJson("truemate_home_data", previousState);
     }
   }
 
@@ -1606,6 +1647,36 @@ export default function HomePage() {
             <div className="mt-2 text-2xl font-semibold text-white">🏆 {homeData.best_streak_days}</div>
           </GlassCard>
         </div>
+
+        <GlassCard className="p-4">
+  <div className="flex items-center justify-between gap-3">
+    <div>
+      <div className="text-xs text-white/50">Proactive reminders</div>
+
+      <div className="mt-1 text-sm text-white/65">
+        Let Aarvi send gentle nudges when needed.
+      </div>
+
+      <div className="mt-2 text-xs text-white/45">
+        {homeData.proactive_enabled
+          ? "Aarvi can send proactive nudges."
+          : "Aarvi will stay quiet unless you open chat."}
+      </div>
+    </div>
+
+    <button
+      onClick={() => void toggleProactiveEnabled(!Boolean(homeData.proactive_enabled))}
+      className={cn(
+        "rounded-full px-4 py-2 text-sm font-medium transition",
+        homeData.proactive_enabled
+          ? "bg-pink-400/20 text-pink-100 hover:bg-pink-400/25"
+          : "bg-white/10 text-white/75 hover:bg-white/15"
+      )}
+    >
+      {homeData.proactive_enabled ? "On" : "Off"}
+    </button>
+  </div>
+</GlassCard>
 
         <div className="mt-4 space-y-3">
           <button

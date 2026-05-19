@@ -71,16 +71,25 @@ export default function SignInPage() {
   }
 
   function setGuestMode() {
-    const maxAge = 60 * 60 * 24 * 30; // 30 days
-    document.cookie = `${GUEST_COOKIE_NAME}=1; path=/; max-age=${maxAge}; samesite=lax`;
+  const maxAge = 60 * 60 * 24 * 30; // 30 days
+  document.cookie = `${GUEST_COOKIE_NAME}=1; path=/; max-age=${maxAge}; samesite=lax`;
 
-    try {
-      localStorage.setItem("truemate_guest", "1");
-      localStorage.setItem("truemate_guest_messages", "0");
-      localStorage.removeItem("truemate_guest_limit_reached");
-      localStorage.removeItem("truemate_guest_chat");
-    } catch {}
-  }
+  try {
+    localStorage.setItem("truemate_guest", "1");
+    localStorage.setItem("truemate_guest_messages", "0");
+    localStorage.removeItem("truemate_guest_limit_reached");
+    localStorage.removeItem("truemate_guest_chat");
+
+    // clear stale cached home data so guest mode doesn't reuse old gallery names
+    localStorage.removeItem("truemate_home_data");
+    localStorage.removeItem("truemate_selected_mood");
+    localStorage.removeItem("truemate_mood_context");
+    localStorage.removeItem("truemate_journal_entries");
+    localStorage.removeItem("truemate_journal_draft");
+    localStorage.removeItem("truemate_chat_starter");
+    localStorage.removeItem("truemate_daily_surprise");
+  } catch {}
+}
 
   async function handleGuestContinue() {
     try {
